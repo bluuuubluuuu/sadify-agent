@@ -10,9 +10,17 @@ if __package__ in {None, ""}:
 
 from sadify.config import AppConfig, load_config
 from sadify.logging_config import configure_logging
+from sadify.models import build_model_routes, build_provider_statuses
 
 
 def build_page_model(config: AppConfig) -> dict[str, object]:
+    model_routes = [
+        route.to_display_dict() for route in build_model_routes(config).values()
+    ]
+    provider_statuses = [
+        status.to_display_dict() for status in build_provider_statuses(config)
+    ]
+
     return {
         "title": "SADify",
         "tagline": (
@@ -21,6 +29,9 @@ def build_page_model(config: AppConfig) -> dict[str, object]:
         ),
         "project": config.google_cloud_project,
         "model": config.sadify_model,
+        "model_provider": config.sadify_model_provider,
+        "model_routes": model_routes,
+        "provider_statuses": provider_statuses,
         "sections": [
             "Requirement intake",
             "Completeness and confidence",
@@ -54,8 +65,14 @@ def main() -> None:
     with st.sidebar:
         st.subheader("Runtime")
         st.write(f"Project: `{page['project']}`")
+        st.write(f"Provider: `{page['model_provider']}`")
         st.write(f"Model: `{page['model']}`")
         st.write(f"Environment: `{config.sadify_env}`")
+        st.subheader("Model routes")
+        for route in page["model_routes"]:
+            st.write(
+                f"{route['task']}: `{route['provider']}` / `{route['model']}`"
+            )
         st.subheader("Diagnostics")
         diagnostics = page["diagnostics"]
         st.write(
@@ -70,6 +87,10 @@ def main() -> None:
                 else "missing"
             ),
         )
+        with st.expander("LLM provider readiness", expanded=False):
+            for status in page["provider_statuses"]:
+                state = "configured" if status["configured"] else "not configured"
+                st.write(f"{status['label']}: {state}")
 
     st.text_area(
         "Describe the operational problem",

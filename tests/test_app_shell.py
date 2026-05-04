@@ -8,6 +8,13 @@ def test_build_page_model_describes_first_screen():
         google_cloud_location="asia-southeast1",
         google_genai_use_vertexai=True,
         sadify_model="gemini-2.5-flash",
+        sadify_model_provider="google",
+        sadify_final_sad_provider="google",
+        sadify_final_sad_model="gemini-2.5-flash",
+        sadify_fallback_provider=None,
+        sadify_fallback_model=None,
+        openai_compatible_base_url=None,
+        ollama_base_url=None,
         sadify_env="local",
         sadify_log_level="INFO",
         sadify_drive_root_folder_id="drive-folder-id",
@@ -21,6 +28,7 @@ def test_build_page_model_describes_first_screen():
     assert page["title"] == "SADify"
     assert "AI system analyst" in page["tagline"]
     assert page["model"] == "gemini-2.5-flash"
+    assert page["model_provider"] == "google"
     assert page["project"] == "sadify"
     assert page["sections"] == [
         "Requirement intake",
@@ -31,3 +39,5 @@ def test_build_page_model_describes_first_screen():
     ]
     assert page["diagnostics"]["drive_folder_configured"] is True
     assert "drive-folder-id" not in str(page["diagnostics"])
+    assert page["model_routes"][0]["model"] == "gemini-2.5-flash"
+    assert page["model_routes"][0]["provider"] == "google"
