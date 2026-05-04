@@ -1,0 +1,56 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+import os
+
+
+_DRIVE_PLACEHOLDERS = {
+    "",
+    "replace-with-your-drive-folder-id",
+    "your-drive-folder-id",
+}
+
+
+@dataclass(frozen=True)
+class AppConfig:
+    google_cloud_project: str
+    google_cloud_location: str
+    google_genai_use_vertexai: bool
+    sadify_model: str
+    sadify_env: str
+    sadify_log_level: str
+    sadify_drive_root_folder_id: str | None
+    sadify_runtime_service_account: str | None
+
+
+def load_config() -> AppConfig:
+    drive_folder_id = os.getenv("SADIFY_DRIVE_ROOT_FOLDER_ID", "").strip()
+    if drive_folder_id in _DRIVE_PLACEHOLDERS:
+        drive_folder_id = None
+
+    return AppConfig(
+        google_cloud_project=os.getenv("GOOGLE_CLOUD_PROJECT", "sadify").strip(),
+        google_cloud_location=os.getenv(
+            "GOOGLE_CLOUD_LOCATION", "asia-southeast1"
+        ).strip(),
+        google_genai_use_vertexai=_env_bool("GOOGLE_GENAI_USE_VERTEXAI", True),
+        sadify_model=os.getenv("SADIFY_MODEL", "gemini-2.5-flash").strip(),
+        sadify_env=os.getenv("SADIFY_ENV", "local").strip(),
+        sadify_log_level=os.getenv("SADIFY_LOG_LEVEL", "INFO").strip().upper(),
+        sadify_drive_root_folder_id=drive_folder_id,
+        sadify_runtime_service_account=_optional_env(
+            "SADIFY_RUNTIME_SERVICE_ACCOUNT"
+        ),
+    )
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _optional_env(name: str) -> str | None:
+    value = os.getenv(name, "").strip()
+    return value or None
