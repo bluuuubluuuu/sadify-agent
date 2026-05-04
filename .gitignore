@@ -1,0 +1,47 @@
+# Planning and handoff documents
+/CLAUDE.md
+/context.md
+/docs/
+/tmp/
+
+# Local secrets and machine-specific config
+.env
+.env.*
+!.env.example
+*.local
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+env/
+dist/
+build/
+*.egg-info/
+
+# Streamlit
+.streamlit/secrets.toml
+
+# Node/tooling caches, if Agents CLI or frontend tooling is used later
+node_modules/
+.npm/
+.pnpm-store/
+
+# Google Cloud and generated outputs
+.gcloud/
+output/
+artifacts/
+exports/
+
+# OS/editor files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
