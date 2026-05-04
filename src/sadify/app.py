@@ -11,6 +11,7 @@ if __package__ in {None, ""}:
 from sadify.config import AppConfig, load_config
 from sadify.logging_config import configure_logging
 from sadify.models import build_model_routes, build_provider_statuses
+from sadify.services.requirement_analysis import analyze_requirement_text
 
 
 def build_page_model(config: AppConfig) -> dict[str, object]:
@@ -46,6 +47,10 @@ def build_page_model(config: AppConfig) -> dict[str, object]:
             ),
         },
     }
+
+
+def build_analysis_view_model(requirement_text: str) -> dict[str, object]:
+    return analyze_requirement_text(requirement_text).to_display_dict()
 
 
 def main() -> None:
@@ -92,7 +97,7 @@ def main() -> None:
                 state = "configured" if status["configured"] else "not configured"
                 st.write(f"{status['label']}: {state}")
 
-    st.text_area(
+    requirement_text = st.text_area(
         "Describe the operational problem",
         placeholder=(
             "Example: Our warehouse team keeps losing track of stock movement..."
@@ -100,15 +105,56 @@ def main() -> None:
         height=180,
     )
 
-    st.button("Analyze requirement", type="primary", disabled=True)
-    st.info(
-        "Checkpoint 1 scaffold is ready. Requirement analysis is implemented "
-        "in the next checkpoints."
-    )
+    if st.button("Analyze requirement", type="primary"):
+        analysis = build_analysis_view_model(requirement_text)
+        if not analysis["is_valid"]:
+            st.error(analysis["validation_error"])
+        else:
+            _render_analysis(analysis)
+    else:
+        st.info(
+            "Checkpoint 3 uses deterministic local analysis first. Live model "
+            "analysis is connected after the response shape is stable."
+        )
 
     columns = st.columns(len(page["sections"]))
     for column, section in zip(columns, page["sections"], strict=True):
         column.metric(section, "Pending")
+
+
+def _render_analysis(analysis: dict[str, object]) -> None:
+    st.subheader("Understanding summary")
+    st.write(analysis["understanding_summary"])
+
+    first, second, third = st.columns(3)
+    first.metric(
+        "Completeness",
+        f"{analysis['completeness_score']}%",
+        analysis["completeness_level"],
+    )
+    second.metric("Confidence", analysis["confidence_label"])
+    third.metric("Mode", analysis["analysis_mode"])
+    st.caption(analysis["confidence_reason"])
+
+    st.subheader("Missing information")
+    missing_information = analysis["missing_information"]
+    if missing_information:
+        st.dataframe(missing_information, hide_index=True, use_container_width=True)
+    else:
+        st.success("No major missing categories detected by deterministic checks.")
+
+    st.subheader("Clarification questions")
+    for question in analysis["clarification_questions"]:
+        st.write(
+            f"{question['question_id']} {question['severity']}: "
+            f"{question['question']}"
+        )
+
+    if analysis["draft_allowed"]:
+        st.info(
+            "Draft generation can be offered next, but unresolved assumptions "
+            "and open questions must stay visible."
+        )
 
 
 if __name__ == "__main__":

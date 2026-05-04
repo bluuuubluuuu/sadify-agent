@@ -1,4 +1,4 @@
-from sadify.app import build_page_model
+from sadify.app import build_analysis_view_model, build_page_model
 from sadify.config import AppConfig
 
 
@@ -41,3 +41,30 @@ def test_build_page_model_describes_first_screen():
     assert "drive-folder-id" not in str(page["diagnostics"])
     assert page["model_routes"][0]["model"] == "gemini-2.5-flash"
     assert page["model_routes"][0]["provider"] == "google"
+
+
+def test_build_analysis_view_model_returns_validation_error_for_empty_input():
+    view_model = build_analysis_view_model(" ")
+
+    assert view_model["is_valid"] is False
+    assert view_model["validation_error"] == (
+        "Enter an operational problem before analysis."
+    )
+
+
+def test_build_analysis_view_model_returns_first_response_sections():
+    view_model = build_analysis_view_model(
+        "Warehouse operators forget to update stock records when items move "
+        "between locations."
+    )
+
+    assert view_model["is_valid"] is True
+    assert view_model["sections"] == [
+        "Understanding summary",
+        "Completeness",
+        "Confidence",
+        "Missing information",
+        "Clarification questions",
+        "Draft option",
+    ]
+    assert view_model["analysis_mode"] == "deterministic"
