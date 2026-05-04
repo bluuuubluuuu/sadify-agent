@@ -29,3 +29,5 @@ def test_build_page_model_describes_first_screen():
         "SAD preview",
         "Exports",
     ]
+    assert page["diagnostics"]["drive_folder_configured"] is True
+    assert "drive-folder-id" not in str(page["diagnostics"])

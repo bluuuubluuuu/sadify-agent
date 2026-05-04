@@ -28,6 +28,12 @@ def build_page_model(config: AppConfig) -> dict[str, object]:
             "SAD preview",
             "Exports",
         ],
+        "diagnostics": {
+            "drive_folder_configured": config.sadify_drive_root_folder_id is not None,
+            "runtime_service_account_configured": (
+                config.sadify_runtime_service_account is not None
+            ),
+        },
     }
 
 
@@ -50,6 +56,20 @@ def main() -> None:
         st.write(f"Project: `{page['project']}`")
         st.write(f"Model: `{page['model']}`")
         st.write(f"Environment: `{config.sadify_env}`")
+        st.subheader("Diagnostics")
+        diagnostics = page["diagnostics"]
+        st.write(
+            "Drive folder:",
+            "configured" if diagnostics["drive_folder_configured"] else "missing",
+        )
+        st.write(
+            "Service account:",
+            (
+                "configured"
+                if diagnostics["runtime_service_account_configured"]
+                else "missing"
+            ),
+        )
 
     st.text_area(
         "Describe the operational problem",
