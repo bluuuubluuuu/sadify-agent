@@ -1,5 +1,42 @@
-from sadify.app import build_analysis_view_model, build_page_model
+from sadify.app import _render_analysis, build_analysis_view_model, build_page_model
 from sadify.config import AppConfig
+
+
+class FakeStreamlit:
+    def __init__(self):
+        self.calls = []
+
+    def subheader(self, value):
+        self.calls.append(("subheader", value))
+
+    def write(self, *values):
+        self.calls.append(("write", values))
+
+    def columns(self, count):
+        self.calls.append(("columns", count))
+        return [FakeColumn(self.calls), FakeColumn(self.calls), FakeColumn(self.calls)]
+
+    def caption(self, value):
+        self.calls.append(("caption", value))
+
+    def dataframe(self, value, *, hide_index, use_container_width):
+        self.calls.append(
+            ("dataframe", value, hide_index, use_container_width)
+        )
+
+    def success(self, value):
+        self.calls.append(("success", value))
+
+    def info(self, value):
+        self.calls.append(("info", value))
+
+
+class FakeColumn:
+    def __init__(self, calls):
+        self.calls = calls
+
+    def metric(self, *values):
+        self.calls.append(("metric", values))
 
 
 def test_build_page_model_describes_first_screen():
@@ -68,3 +105,16 @@ def test_build_analysis_view_model_returns_first_response_sections():
         "Draft option",
     ]
     assert view_model["analysis_mode"] == "deterministic"
+
+
+def test_render_analysis_uses_provided_streamlit_module():
+    view_model = build_analysis_view_model(
+        "Warehouse operators forget to update stock records when items move "
+        "between locations."
+    )
+    fake_st = FakeStreamlit()
+
+    _render_analysis(view_model, fake_st)
+
+    assert ("subheader", "Understanding summary") in fake_st.calls
+    assert ("subheader", "Missing information") in fake_st.calls

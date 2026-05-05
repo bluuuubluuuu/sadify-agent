@@ -110,7 +110,7 @@ def main() -> None:
         if not analysis["is_valid"]:
             st.error(analysis["validation_error"])
         else:
-            _render_analysis(analysis)
+            _render_analysis(analysis, st)
     else:
         st.info(
             "Checkpoint 3 uses deterministic local analysis first. Live model "
@@ -122,11 +122,11 @@ def main() -> None:
         column.metric(section, "Pending")
 
 
-def _render_analysis(analysis: dict[str, object]) -> None:
-    st.subheader("Understanding summary")
-    st.write(analysis["understanding_summary"])
+def _render_analysis(analysis: dict[str, object], st_module) -> None:
+    st_module.subheader("Understanding summary")
+    st_module.write(analysis["understanding_summary"])
 
-    first, second, third = st.columns(3)
+    first, second, third = st_module.columns(3)
     first.metric(
         "Completeness",
         f"{analysis['completeness_score']}%",
@@ -134,24 +134,30 @@ def _render_analysis(analysis: dict[str, object]) -> None:
     )
     second.metric("Confidence", analysis["confidence_label"])
     third.metric("Mode", analysis["analysis_mode"])
-    st.caption(analysis["confidence_reason"])
+    st_module.caption(analysis["confidence_reason"])
 
-    st.subheader("Missing information")
+    st_module.subheader("Missing information")
     missing_information = analysis["missing_information"]
     if missing_information:
-        st.dataframe(missing_information, hide_index=True, use_container_width=True)
+        st_module.dataframe(
+            missing_information,
+            hide_index=True,
+            use_container_width=True,
+        )
     else:
-        st.success("No major missing categories detected by deterministic checks.")
+        st_module.success(
+            "No major missing categories detected by deterministic checks."
+        )
 
-    st.subheader("Clarification questions")
+    st_module.subheader("Clarification questions")
     for question in analysis["clarification_questions"]:
-        st.write(
+        st_module.write(
             f"{question['question_id']} {question['severity']}: "
             f"{question['question']}"
         )
 
     if analysis["draft_allowed"]:
-        st.info(
+        st_module.info(
             "Draft generation can be offered next, but unresolved assumptions "
             "and open questions must stay visible."
         )
