@@ -1,5 +1,12 @@
-from sadify.app import _render_analysis, build_analysis_view_model, build_page_model
+from sadify.app import (
+    _render_analysis,
+    build_analysis_view_model,
+    build_page_model,
+    build_uploaded_sources_view_model,
+    combine_requirement_context,
+)
 from sadify.config import AppConfig
+from sadify.extractors.business_files import ExtractedRequirementSource
 
 
 class FakeStreamlit:
@@ -37,6 +44,15 @@ class FakeColumn:
 
     def metric(self, *values):
         self.calls.append(("metric", values))
+
+
+class FakeUploadedFile:
+    def __init__(self, name, content):
+        self.name = name
+        self._content = content
+
+    def getvalue(self):
+        return self._content
 
 
 def test_build_page_model_describes_first_screen():
@@ -135,3 +151,48 @@ def test_render_analysis_uses_business_column_headings():
         "Why this matters",
         "What to answer next",
     ]
+
+
+def test_build_uploaded_sources_view_model_extracts_files_and_reports_errors():
+    view_model = build_uploaded_sources_view_model(
+        [
+            FakeUploadedFile(
+                "warehouse.txt",
+                b"Warehouse staff need to record stock movement.",
+            ),
+            FakeUploadedFile("photo.png", b"unsupported"),
+        ]
+    )
+
+    assert view_model["sources"][0]["filename"] == "warehouse.txt"
+    assert view_model["sources"][0]["file_type"] == "txt"
+    assert "stock movement" in view_model["sources"][0]["normalized_text"]
+    assert view_model["errors"] == [
+        {
+            "filename": "photo.png",
+            "message": (
+                "Unsupported file type '.png' for photo.png. "
+                "Supported files: MD, TXT, PDF, DOCX, XLSX, CSV."
+            ),
+        }
+    ]
+
+
+def test_combine_requirement_context_keeps_manual_text_before_file_context():
+    combined = combine_requirement_context(
+        "Manual note from user.",
+        [
+            ExtractedRequirementSource(
+                filename="warehouse.txt",
+                file_type="txt",
+                normalized_text="File note about approval.",
+                metadata={},
+            )
+        ],
+    )
+
+    assert combined == (
+        "Manual note from user.\n\n"
+        "Source file: warehouse.txt\n"
+        "File note about approval."
+    )
