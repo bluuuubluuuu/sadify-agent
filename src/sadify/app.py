@@ -74,12 +74,12 @@ def build_analysis_view_model(requirement_text: str) -> dict[str, object]:
 
 
 def build_uploaded_sources_view_model(
-    uploaded_files: Sequence[UploadedBusinessFile],
+    uploaded_files: Sequence[UploadedBusinessFile] | None,
 ) -> dict[str, Any]:
     source_objects: list[ExtractedRequirementSource] = []
     errors: list[dict[str, str]] = []
 
-    for uploaded_file in uploaded_files:
+    for uploaded_file in uploaded_files or []:
         try:
             source_objects.append(
                 extract_requirement_source(
