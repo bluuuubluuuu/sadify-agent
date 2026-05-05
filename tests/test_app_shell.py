@@ -178,6 +178,17 @@ def test_build_uploaded_sources_view_model_extracts_files_and_reports_errors():
     ]
 
 
+def test_build_uploaded_sources_view_model_handles_no_files():
+    view_model = build_uploaded_sources_view_model(None)
+
+    assert view_model == {
+        "source_objects": [],
+        "sources": [],
+        "source_summaries": [],
+        "errors": [],
+    }
+
+
 def test_combine_requirement_context_keeps_manual_text_before_file_context():
     combined = combine_requirement_context(
         "Manual note from user.",
