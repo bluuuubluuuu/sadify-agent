@@ -80,6 +80,22 @@ def test_extracts_docx_paragraphs():
     assert docx_source.metadata["paragraph_count"] == 2
 
 
+def test_extracts_docx_table_cells():
+    docx_source = extract_requirement_source(
+        "plantation-report.docx",
+        _sample_docx_with_table_bytes(),
+    )
+
+    assert "Field Daily Report" in docx_source.normalized_text
+    assert "DOCX table 1" in docx_source.normalized_text
+    assert "Block, Activity, Status" in docx_source.normalized_text
+    assert "BLI05, Spraying, Completed" in docx_source.normalized_text
+    assert "BLI06, Harvesting, Pending" in docx_source.normalized_text
+    assert docx_source.metadata["paragraph_count"] == 1
+    assert docx_source.metadata["table_count"] == 1
+    assert docx_source.metadata["table_row_count"] == 3
+
+
 def test_summarizes_csv_headers_rows_and_preview():
     csv_source = extract_requirement_source(
         "harvest.csv",
@@ -147,6 +163,25 @@ def _sample_docx_bytes(paragraphs: list[str]) -> bytes:
     document = Document()
     for paragraph in paragraphs:
         document.add_paragraph(paragraph)
+    output = BytesIO()
+    document.save(output)
+    return output.getvalue()
+
+
+def _sample_docx_with_table_bytes() -> bytes:
+    from docx import Document
+
+    document = Document()
+    document.add_paragraph("Field Daily Report")
+    table = document.add_table(rows=3, cols=3)
+    values = [
+        ["Block", "Activity", "Status"],
+        ["BLI05", "Spraying", "Completed"],
+        ["BLI06", "Harvesting", "Pending"],
+    ]
+    for row_index, row_values in enumerate(values):
+        for cell_index, value in enumerate(row_values):
+            table.rows[row_index].cells[cell_index].text = value
     output = BytesIO()
     document.save(output)
     return output.getvalue()

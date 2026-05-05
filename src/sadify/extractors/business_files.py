@@ -151,7 +151,35 @@ def _extract_docx(content: bytes) -> tuple[str, dict[str, Any]]:
         for paragraph in document.paragraphs
         if paragraph.text.strip()
     ]
-    return "\n".join(paragraphs), {"paragraph_count": len(paragraphs)}
+    table_summaries: list[str] = []
+    table_row_count = 0
+
+    for table_index, table in enumerate(document.tables, start=1):
+        table_rows: list[list[str]] = []
+        for row in table.rows:
+            row_values = [
+                _normalize_cell_text(cell.text)
+                for cell in row.cells
+                if _normalize_cell_text(cell.text)
+            ]
+            if row_values:
+                table_rows.append(row_values)
+        if table_rows:
+            table_row_count += len(table_rows)
+            table_summaries.append(
+                "\n".join(
+                    [f"DOCX table {table_index}"]
+                    + [", ".join(row) for row in table_rows]
+                )
+            )
+
+    text_parts = ["\n".join(paragraphs)] if paragraphs else []
+    text_parts.extend(table_summaries)
+    return "\n\n".join(text_parts), {
+        "paragraph_count": len(paragraphs),
+        "table_count": len(document.tables),
+        "table_row_count": table_row_count,
+    }
 
 
 def _extract_csv(content: bytes) -> tuple[str, dict[str, Any]]:
@@ -242,6 +270,10 @@ def _stringify_cell(value: Any) -> str:
     if value is None:
         return ""
     return str(value).strip()
+
+
+def _normalize_cell_text(value: str) -> str:
+    return " ".join(value.split())
 
 
 def _normalize_text(text: str) -> str:
