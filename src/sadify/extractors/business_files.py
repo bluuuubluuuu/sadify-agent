@@ -60,6 +60,8 @@ def extract_requirement_source(
 
     normalized_text = _normalize_text(text)
     if not normalized_text:
+        if file_type == "pdf":
+            raise FileExtractionError(_pdf_text_failure_message(clean_filename))
         raise FileExtractionError(
             f"No readable requirement text found in {clean_filename}."
         )
@@ -85,7 +87,7 @@ def _extract_by_extension(
         text = _decode_text(content)
         return "txt", text, {"character_count": len(text)}
     if extension == ".pdf":
-        return "pdf", *_extract_pdf(content)
+        return "pdf", *_extract_pdf(filename, content)
     if extension == ".docx":
         return "docx", *_extract_docx(content)
     if extension == ".xlsx":
@@ -107,16 +109,37 @@ def _decode_text(content: bytes) -> str:
         return content.decode("latin-1")
 
 
-def _extract_pdf(content: bytes) -> tuple[str, dict[str, Any]]:
+def _extract_pdf(filename: str, content: bytes) -> tuple[str, dict[str, Any]]:
     from pypdf import PdfReader
 
-    reader = PdfReader(BytesIO(content))
-    page_text: list[str] = []
-    for page in reader.pages:
-        text = page.extract_text()
-        if text and text.strip():
-            page_text.append(text.strip())
-    return "\n\n".join(page_text), {"page_count": len(reader.pages)}
+    try:
+        reader = PdfReader(BytesIO(content), strict=False)
+        page_count = len(reader.pages)
+        page_text: list[str] = []
+        failed_pages: list[int] = []
+        for page_index in range(page_count):
+            try:
+                text = reader.pages[page_index].extract_text()
+            except Exception:
+                failed_pages.append(page_index + 1)
+                continue
+            if text and text.strip():
+                page_text.append(text.strip())
+        return "\n\n".join(page_text), {
+            "page_count": page_count,
+            "failed_pages": failed_pages,
+        }
+    except Exception as exc:
+        raise FileExtractionError(_pdf_text_failure_message(filename)) from exc
+
+
+def _pdf_text_failure_message(filename: str) -> str:
+    return (
+        f"Could not read selectable text from {filename}. "
+        "The PDF may be scanned, protected, damaged, or exported in a format "
+        "this prototype cannot parse yet. Try uploading a DOCX, MD, TXT, CSV, "
+        "or XLSX version, or export the PDF again with selectable text."
+    )
 
 
 def _extract_docx(content: bytes) -> tuple[str, dict[str, Any]]:

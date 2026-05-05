@@ -43,6 +43,24 @@ def test_extracts_selectable_pdf_text():
     assert pdf_source.metadata["page_count"] == 1
 
 
+def test_rejects_unreadable_pdf_with_business_friendly_message():
+    with pytest.raises(FileExtractionError) as exc_info:
+        extract_requirement_source(
+            "Project_Statement_of_HAMS_Wialon_Report.pdf",
+            b"%PDF-1.4\n1 0 obj\n<< /Length 200 >>\nstream\nBT\n",
+        )
+
+    message = str(exc_info.value)
+    assert message == (
+        "Could not read selectable text from "
+        "Project_Statement_of_HAMS_Wialon_Report.pdf. The PDF may be scanned, "
+        "protected, damaged, or exported in a format this prototype cannot parse yet. "
+        "Try uploading a DOCX, MD, TXT, CSV, or XLSX version, or export the PDF "
+        "again with selectable text."
+    )
+    assert "Stream has ended unexpectedly" not in message
+
+
 def test_extracts_docx_paragraphs():
     docx_source = extract_requirement_source(
         "plantation.docx",
