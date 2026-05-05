@@ -96,6 +96,18 @@ def test_extracts_docx_table_cells():
     assert docx_source.metadata["table_row_count"] == 3
 
 
+def test_extracts_docx_header_and_footer_text():
+    docx_source = extract_requirement_source(
+        "plantation-report.docx",
+        _sample_docx_with_header_footer_bytes(),
+    )
+
+    assert "Header: Estate Operations Requirement" in docx_source.normalized_text
+    assert "Field workers record rainfall by block." in docx_source.normalized_text
+    assert "Footer: Prepared by operations team" in docx_source.normalized_text
+    assert docx_source.metadata["header_footer_paragraph_count"] == 2
+
+
 def test_summarizes_csv_headers_rows_and_preview():
     csv_source = extract_requirement_source(
         "harvest.csv",
@@ -121,6 +133,25 @@ def test_summarizes_csv_headers_rows_and_preview():
     assert "A01, Aminah, 120, Pending" in csv_source.normalized_text
 
 
+def test_summarizes_csv_quoted_commas_and_multiline_cells():
+    csv_source = extract_requirement_source(
+        "issues.csv",
+        (
+            "Block,Issue,Action\n"
+            'BLI05,"Loose fruit count, high variance","Supervisor review needed"\n'
+            'BLI06,"Line one\nline two","Escalate to manager"\n'
+        ).encode("utf-8"),
+    )
+
+    assert csv_source.metadata["row_count"] == 2
+    assert "BLI05, Loose fruit count, high variance, Supervisor review needed" in (
+        csv_source.normalized_text
+    )
+    assert "BLI06, Line one line two, Escalate to manager" in (
+        csv_source.normalized_text
+    )
+
+
 def test_summarizes_xlsx_sheets_headers_rows_and_preview():
     xlsx_source = extract_requirement_source(
         "daily-harvest.xlsx",
@@ -138,6 +169,24 @@ def test_summarizes_xlsx_sheets_headers_rows_and_preview():
     ]
     assert "Sheet: Harvest" in xlsx_source.normalized_text
     assert "A01, Aminah, 120" in xlsx_source.normalized_text
+
+
+def test_summarizes_xlsx_multiple_sheets_comments_and_formulas():
+    xlsx_source = extract_requirement_source(
+        "estate-workbook.xlsx",
+        _sample_xlsx_with_comments_and_formula_bytes(),
+    )
+
+    assert xlsx_source.metadata["sheet_count"] == 2
+    assert xlsx_source.metadata["sheets"][1]["name"] == "Issues"
+    assert xlsx_source.metadata["sheets"][1]["comment_count"] == 1
+    assert "Sheet: Harvest" in xlsx_source.normalized_text
+    assert "Sheet: Issues" in xlsx_source.normalized_text
+    assert "No mobile signal" in xlsx_source.normalized_text
+    assert "Comment B2: Field supervisor says offline mode is needed" in (
+        xlsx_source.normalized_text
+    )
+    assert "=CONCAT(\"Needs \",\"approval\")" in xlsx_source.normalized_text
 
 
 def test_rejects_unsupported_file_type_with_clear_message():
@@ -187,6 +236,19 @@ def _sample_docx_with_table_bytes() -> bytes:
     return output.getvalue()
 
 
+def _sample_docx_with_header_footer_bytes() -> bytes:
+    from docx import Document
+
+    document = Document()
+    section = document.sections[0]
+    section.header.paragraphs[0].text = "Header: Estate Operations Requirement"
+    document.add_paragraph("Field workers record rainfall by block.")
+    section.footer.paragraphs[0].text = "Footer: Prepared by operations team"
+    output = BytesIO()
+    document.save(output)
+    return output.getvalue()
+
+
 def _sample_xlsx_bytes() -> bytes:
     from openpyxl import Workbook
 
@@ -196,6 +258,29 @@ def _sample_xlsx_bytes() -> bytes:
     sheet.append(["Block", "Worker", "WeightKg"])
     sheet.append(["A01", "Aminah", 120])
     sheet.append(["A02", "Bala", 95])
+    output = BytesIO()
+    workbook.save(output)
+    return output.getvalue()
+
+
+def _sample_xlsx_with_comments_and_formula_bytes() -> bytes:
+    from openpyxl import Workbook
+    from openpyxl.comments import Comment
+
+    workbook = Workbook()
+    harvest = workbook.active
+    harvest.title = "Harvest"
+    harvest.append(["Block", "Worker", "WeightKg"])
+    harvest.append(["A01", "Aminah", 120])
+
+    issues = workbook.create_sheet("Issues")
+    issues.append(["Block", "Issue", "Next Step"])
+    issues.append(["BLI05", "No mobile signal", '=CONCAT("Needs ","approval")'])
+    issues["B2"].comment = Comment(
+        "Field supervisor says offline mode is needed",
+        "operations",
+    )
+
     output = BytesIO()
     workbook.save(output)
     return output.getvalue()

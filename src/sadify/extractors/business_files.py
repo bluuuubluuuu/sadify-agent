@@ -146,15 +146,46 @@ def _extract_docx(content: bytes) -> tuple[str, dict[str, Any]]:
     from docx import Document
 
     document = Document(BytesIO(content))
-    paragraphs = [
+    paragraphs = _docx_paragraph_texts(document.paragraphs)
+    header_footer_paragraphs = _docx_header_footer_paragraphs(document)
+    table_summaries, table_row_count = _docx_table_summaries(document.tables)
+
+    text_parts = ["\n".join(paragraphs)] if paragraphs else []
+    if header_footer_paragraphs:
+        text_parts.append("\n".join(header_footer_paragraphs))
+    text_parts.extend(table_summaries)
+    return "\n\n".join(text_parts), {
+        "paragraph_count": len(paragraphs),
+        "header_footer_paragraph_count": len(header_footer_paragraphs),
+        "table_count": len(document.tables),
+        "table_row_count": table_row_count,
+    }
+
+
+def _docx_paragraph_texts(paragraphs) -> list[str]:
+    return [
         paragraph.text.strip()
-        for paragraph in document.paragraphs
+        for paragraph in paragraphs
         if paragraph.text.strip()
     ]
+
+
+def _docx_header_footer_paragraphs(document) -> list[str]:
+    texts: list[str] = []
+    seen: set[str] = set()
+    for section in document.sections:
+        for part in (section.header, section.footer):
+            for text in _docx_paragraph_texts(part.paragraphs):
+                if text not in seen:
+                    texts.append(text)
+                    seen.add(text)
+    return texts
+
+
+def _docx_table_summaries(tables) -> tuple[list[str], int]:
     table_summaries: list[str] = []
     table_row_count = 0
-
-    for table_index, table in enumerate(document.tables, start=1):
+    for table_index, table in enumerate(tables, start=1):
         table_rows: list[list[str]] = []
         for row in table.rows:
             row_values = [
@@ -172,20 +203,13 @@ def _extract_docx(content: bytes) -> tuple[str, dict[str, Any]]:
                     + [", ".join(row) for row in table_rows]
                 )
             )
-
-    text_parts = ["\n".join(paragraphs)] if paragraphs else []
-    text_parts.extend(table_summaries)
-    return "\n\n".join(text_parts), {
-        "paragraph_count": len(paragraphs),
-        "table_count": len(document.tables),
-        "table_row_count": table_row_count,
-    }
+    return table_summaries, table_row_count
 
 
 def _extract_csv(content: bytes) -> tuple[str, dict[str, Any]]:
     text = _decode_text(content)
     rows = [
-        [cell.strip() for cell in row]
+        [_normalize_cell_text(cell) for cell in row]
         for row in csv.reader(StringIO(text))
         if any(cell.strip() for cell in row)
     ]
@@ -208,36 +232,51 @@ def _extract_csv(content: bytes) -> tuple[str, dict[str, Any]]:
 def _extract_xlsx(content: bytes) -> tuple[str, dict[str, Any]]:
     from openpyxl import load_workbook
 
-    workbook = load_workbook(BytesIO(content), read_only=True, data_only=True)
+    workbook = load_workbook(BytesIO(content), read_only=False, data_only=False)
     sheet_summaries: list[str] = []
     sheet_metadata: list[dict[str, Any]] = []
 
     for sheet in workbook.worksheets:
+        comments: list[str] = []
         rows = [
-            [_stringify_cell(cell) for cell in row]
-            for row in sheet.iter_rows(values_only=True)
+            [_stringify_cell(cell.value) for cell in row]
+            for row in sheet.iter_rows()
         ]
+        for row in sheet.iter_rows():
+            for cell in row:
+                if cell.comment and cell.comment.text.strip():
+                    comments.append(
+                        f"Comment {cell.coordinate}: "
+                        f"{_normalize_cell_text(cell.comment.text)}"
+                    )
         rows = [row for row in rows if any(cell for cell in row)]
         if not rows:
             sheet_metadata.append(
-                {"name": sheet.title, "row_count": 0, "columns": []}
+                {
+                    "name": sheet.title,
+                    "row_count": 0,
+                    "columns": [],
+                    "comment_count": len(comments),
+                }
             )
             continue
 
         columns = rows[0]
         data_rows = rows[1:]
-        sheet_summaries.append(
-            _table_summary_text(
-                title=f"Sheet: {sheet.title}",
-                columns=columns,
-                data_rows=data_rows,
-            )
+        sheet_summary = _table_summary_text(
+            title=f"Sheet: {sheet.title}",
+            columns=columns,
+            data_rows=data_rows,
         )
+        if comments:
+            sheet_summary = f"{sheet_summary}\nComments:\n" + "\n".join(comments)
+        sheet_summaries.append(sheet_summary)
         sheet_metadata.append(
             {
                 "name": sheet.title,
                 "row_count": len(data_rows),
                 "columns": columns,
+                "comment_count": len(comments),
             }
         )
 
