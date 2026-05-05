@@ -37,6 +37,37 @@ def test_analyze_requirement_returns_standard_first_response_for_messy_text():
     assert analysis.draft_allowed is True
 
 
+def test_analysis_display_copy_is_written_for_business_users():
+    analysis = analyze_requirement_text("We need a better system.")
+
+    display = analysis.to_display_dict()
+
+    assert display["sections"] == [
+        "What SADify understands",
+        "Readiness",
+        "Confidence",
+        "What we still need to know",
+        "Questions to confirm",
+        "Draft option",
+    ]
+    first_missing = display["missing_information"][0]
+    assert list(first_missing) == [
+        "area",
+        "priority",
+        "what_is_unclear",
+        "why_this_matters",
+        "what_to_answer_next",
+    ]
+    assert first_missing["area"] == "People involved"
+    assert first_missing["priority"] == "High"
+    assert first_missing["what_is_unclear"] == (
+        "We do not yet know who uses, checks, or owns this process."
+    )
+    assert display["clarification_questions"][0]["question"] == (
+        "Who uses this process, and who is responsible for checking or approving it?"
+    )
+
+
 def test_analysis_display_dict_has_no_raw_secret_shaped_data():
     analysis = analyze_requirement_text(
         "Operators need a mobile form to record machine downtime by line, "

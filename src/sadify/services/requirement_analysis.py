@@ -5,11 +5,11 @@ import re
 
 
 _STANDARD_FIRST_RESPONSE_SECTIONS = (
-    "Understanding summary",
-    "Completeness",
+    "What SADify understands",
+    "Readiness",
     "Confidence",
-    "Missing information",
-    "Clarification questions",
+    "What we still need to know",
+    "Questions to confirm",
     "Draft option",
 )
 
@@ -17,31 +17,32 @@ _STANDARD_FIRST_RESPONSE_SECTIONS = (
 @dataclass(frozen=True)
 class MissingInformation:
     category: str
-    severity: str
-    item: str
-    why_it_matters: str
-    suggested_next_step: str
+    area: str
+    priority: str
+    what_is_unclear: str
+    why_this_matters: str
+    what_to_answer_next: str
 
     def to_display_dict(self) -> dict[str, str]:
         return {
-            "category": self.category,
-            "severity": self.severity,
-            "item": self.item,
-            "why_it_matters": self.why_it_matters,
-            "suggested_next_step": self.suggested_next_step,
+            "area": self.area,
+            "priority": self.priority,
+            "what_is_unclear": self.what_is_unclear,
+            "why_this_matters": self.why_this_matters,
+            "what_to_answer_next": self.what_to_answer_next,
         }
 
 
 @dataclass(frozen=True)
 class ClarificationQuestion:
     question_id: str
-    severity: str
+    priority: str
     question: str
 
     def to_display_dict(self) -> dict[str, str]:
         return {
             "question_id": self.question_id,
-            "severity": self.severity,
+            "priority": self.priority,
             "question": self.question,
         }
 
@@ -107,12 +108,21 @@ _CATEGORY_RULES = (
         ),
         missing=MissingInformation(
             category="Actors",
-            severity="[HIGH]",
-            item="User roles are not clear.",
-            why_it_matters="Developers need to know who uses and owns each workflow step.",
-            suggested_next_step="Name the main users, reviewers, and managers.",
+            area="People involved",
+            priority="High",
+            what_is_unclear=(
+                "We do not yet know who uses, checks, or owns this process."
+            ),
+            why_this_matters=(
+                "The system needs to match the real responsibilities in the business."
+            ),
+            what_to_answer_next=(
+                "Name the staff, supervisors, managers, customers, or partners involved."
+            ),
         ),
-        question="Who are the users, reviewers, and owners involved in this process?",
+        question=(
+            "Who uses this process, and who is responsible for checking or approving it?"
+        ),
     ),
     RequirementCategoryRule(
         category="Workflow",
@@ -130,12 +140,15 @@ _CATEGORY_RULES = (
         ),
         missing=MissingInformation(
             category="Workflow",
-            severity="[CRITICAL]",
-            item="Current or target workflow is not described.",
-            why_it_matters="The system design depends on process steps and handoffs.",
-            suggested_next_step="Describe what happens from trigger to completion.",
+            area="Process steps",
+            priority="Critical",
+            what_is_unclear="The start-to-finish process is not clear yet.",
+            why_this_matters=(
+                "SADify needs the real steps before it can describe what the system should support."
+            ),
+            what_to_answer_next="Explain what happens first, next, and last.",
         ),
-        question="What are the current process steps from start to finish?",
+        question="What happens first, next, and last in this process?",
     ),
     RequirementCategoryRule(
         category="Data fields",
@@ -153,12 +166,19 @@ _CATEGORY_RULES = (
         ),
         missing=MissingInformation(
             category="Data fields",
-            severity="[HIGH]",
-            item="Required data fields are incomplete.",
-            why_it_matters="Database, form, and validation design need concrete fields.",
-            suggested_next_step="List the fields that must be captured and reported.",
+            area="Details to capture",
+            priority="High",
+            what_is_unclear=(
+                "We do not yet know what details staff need to enter, scan, or select."
+            ),
+            why_this_matters=(
+                "Forms, records, and reports depend on these details."
+            ),
+            what_to_answer_next=(
+                "List details such as item, quantity, status, date, location, reason, or remarks."
+            ),
         ),
-        question="What exact data fields must the system capture?",
+        question="What details must staff enter, scan, or select?",
     ),
     RequirementCategoryRule(
         category="Approval rules",
@@ -173,12 +193,19 @@ _CATEGORY_RULES = (
         ),
         missing=MissingInformation(
             category="Approval rules",
-            severity="[HIGH]",
-            item="Approval or verification rules are missing.",
-            why_it_matters="Permissions and workflow states cannot be designed safely without this.",
-            suggested_next_step="Define who can approve, reject, verify, or override records.",
+            area="Checking and approval",
+            priority="High",
+            what_is_unclear=(
+                "It is not clear who checks, approves, rejects, or changes records."
+            ),
+            why_this_matters=(
+                "The system needs clear controls for important decisions and changes."
+            ),
+            what_to_answer_next=(
+                "Say who can check, approve, reject, correct, or override the record."
+            ),
         ),
-        question="Who verifies, approves, rejects, or overrides the record?",
+        question="Who can check, approve, reject, correct, or override records?",
     ),
     RequirementCategoryRule(
         category="Reports",
@@ -192,12 +219,19 @@ _CATEGORY_RULES = (
         ),
         missing=MissingInformation(
             category="Reports",
-            severity="[MEDIUM]",
-            item="Reporting needs are not specified.",
-            why_it_matters="Output screens and exports depend on the decisions users need to make.",
-            suggested_next_step="Identify reports, dashboards, or summaries users expect.",
+            area="Reports and visibility",
+            priority="Medium",
+            what_is_unclear=(
+                "We do not yet know what summaries, dashboards, or exports people need."
+            ),
+            why_this_matters=(
+                "Reports should support the decisions managers actually make."
+            ),
+            what_to_answer_next=(
+                "List the reports, dashboards, alerts, or exports people expect."
+            ),
         ),
-        question="What reports, dashboards, or summaries are needed?",
+        question="What reports, dashboards, alerts, or exports do people need?",
     ),
     RequirementCategoryRule(
         category="Exceptions",
@@ -213,12 +247,21 @@ _CATEGORY_RULES = (
         ),
         missing=MissingInformation(
             category="Exceptions",
-            severity="[MEDIUM]",
-            item="Exception handling is not described.",
-            why_it_matters="Systems need behavior for mistakes, missing data, and unusual cases.",
-            suggested_next_step="Describe what should happen when something goes wrong.",
+            area="Problems and edge cases",
+            priority="Medium",
+            what_is_unclear=(
+                "We do not yet know what should happen when something goes wrong."
+            ),
+            why_this_matters=(
+                "Real operations have missing, late, duplicated, or incorrect records."
+            ),
+            what_to_answer_next=(
+                "Describe mistakes, delays, missing data, failed scans, or unusual cases."
+            ),
         ),
-        question="What should happen when records are wrong, missing, late, or duplicated?",
+        question=(
+            "What should happen when records are wrong, missing, late, or duplicated?"
+        ),
     ),
     RequirementCategoryRule(
         category="Permissions",
@@ -231,12 +274,19 @@ _CATEGORY_RULES = (
         ),
         missing=MissingInformation(
             category="Permissions",
-            severity="[HIGH]",
-            item="Access and permission rules are missing.",
-            why_it_matters="User roles affect security, screens, and allowed actions.",
-            suggested_next_step="Define who can create, edit, view, approve, and export data.",
+            area="Access",
+            priority="High",
+            what_is_unclear=(
+                "It is not clear who can create, edit, view, approve, or export records."
+            ),
+            why_this_matters=(
+                "Different people usually need different screens and allowed actions."
+            ),
+            what_to_answer_next=(
+                "Say what each role is allowed to do and what they should not see."
+            ),
         ),
-        question="Who can create, edit, view, approve, and export the records?",
+        question="Who can create, edit, view, approve, and export records?",
     ),
     RequirementCategoryRule(
         category="Non-functional constraints",
@@ -251,12 +301,21 @@ _CATEGORY_RULES = (
         ),
         missing=MissingInformation(
             category="Non-functional constraints",
-            severity="[MEDIUM]",
-            item="Non-functional constraints are missing.",
-            why_it_matters="Reliability, security, speed, and device needs affect architecture.",
-            suggested_next_step="Confirm constraints such as mobile use, offline mode, audit trail, and performance.",
+            area="Practical operating needs",
+            priority="Medium",
+            what_is_unclear=(
+                "We do not yet know practical needs such as mobile use, history, speed, or offline work."
+            ),
+            why_this_matters=(
+                "These needs affect whether the system works well in daily operations."
+            ),
+            what_to_answer_next=(
+                "Confirm mobile use, offline work, audit history, security, or busy-hour speed needs."
+            ),
         ),
-        question="Are there any mobile, offline, audit, security, or performance needs?",
+        question=(
+            "Does this need to work on mobile, keep history, work offline, or stay fast during busy hours?"
+        ),
     ),
 )
 
@@ -355,7 +414,7 @@ def _build_questions(
     return tuple(
         ClarificationQuestion(
             question_id=f"Q-{index:03}",
-            severity=rule.missing.severity,
+            priority=rule.missing.priority,
             question=rule.question,
         )
         for index, rule in enumerate(missing_rules[:5], start=1)
