@@ -25,13 +25,15 @@ def test_analyze_requirement_returns_standard_first_response_for_messy_text():
     assert analysis.is_valid is True
     assert analysis.analysis_mode == "deterministic"
     assert "warehouse team" in analysis.understanding_summary.lower()
-    assert analysis.completeness_score == 62
-    assert analysis.completeness_level == "Partial"
+    assert analysis.completeness_score == 72
+    assert analysis.completeness_level == "Good"
     assert analysis.confidence_label == "Medium"
+    assert analysis.scoring_basis == "local deterministic evidence checklist"
+    assert any("Business problem:" in item for item in analysis.evidence_summary)
     assert [item.category for item in analysis.missing_information] == [
-        "Approval rules",
-        "Permissions",
-        "Non-functional constraints",
+        "approval",
+        "access",
+        "operating_needs",
     ]
     assert len(analysis.clarification_questions) == 3
     assert analysis.draft_allowed is True
@@ -58,13 +60,13 @@ def test_analysis_display_copy_is_written_for_business_users():
         "why_this_matters",
         "what_to_answer_next",
     ]
-    assert first_missing["area"] == "People involved"
-    assert first_missing["priority"] == "High"
+    assert first_missing["area"] == "Business problem"
+    assert first_missing["priority"] == "Critical"
     assert first_missing["what_is_unclear"] == (
-        "We do not yet know who uses, checks, or owns this process."
+        "We do not yet know what business problem should be solved."
     )
     assert display["clarification_questions"][0]["question"] == (
-        "Who uses this process, and who is responsible for checking or approving it?"
+        "What business problem should the system solve?"
     )
 
 
@@ -78,6 +80,8 @@ def test_analysis_display_dict_has_no_raw_secret_shaped_data():
 
     assert display["sections"] == standard_first_response_sections()
     assert display["draft_allowed"] is True
+    assert display["scoring_basis"] == "local deterministic evidence checklist"
+    assert isinstance(display["evidence_summary"], list)
     assert "api_key" not in str(display).lower()
     assert "token" not in str(display).lower()
 
@@ -87,6 +91,16 @@ def test_keyword_matching_does_not_count_date_inside_update_as_data_field():
         "Operators update the process when mistakes happen."
     )
 
-    assert "Data fields" in [
+    assert "details" in [
         item.category for item in analysis.missing_information
     ]
+
+
+def test_role_only_input_does_not_inflate_completeness():
+    analysis = analyze_requirement_text("admin")
+
+    assert analysis.is_valid is True
+    assert analysis.completeness_score <= 10
+    assert analysis.confidence_label == "Low"
+    assert analysis.missing_information[0].area == "Business problem"
+    assert "too little business context" in analysis.confidence_reason.lower()

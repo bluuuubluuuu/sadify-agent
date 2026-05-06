@@ -209,6 +209,11 @@ def _render_analysis(analysis: dict[str, object], st_module) -> None:
     second.metric("Confidence", analysis["confidence_label"])
     third.metric("Current mode", analysis["analysis_mode"])
     st_module.caption(analysis["confidence_reason"])
+    if analysis["evidence_summary"]:
+        with st_module.expander("Why this score", expanded=False) as evidence_panel:
+            evidence_panel.caption(analysis["scoring_basis"])
+            for evidence in analysis["evidence_summary"]:
+                evidence_panel.write(evidence)
 
     st_module.subheader("What we still need to know")
     missing_information = analysis["missing_information"]

@@ -37,6 +37,10 @@ class FakeStreamlit:
     def info(self, value):
         self.calls.append(("info", value))
 
+    def expander(self, label, *, expanded):
+        self.calls.append(("expander", label, expanded))
+        return FakeExpander(self.calls)
+
 
 class FakeColumn:
     def __init__(self, calls):
@@ -44,6 +48,23 @@ class FakeColumn:
 
     def metric(self, *values):
         self.calls.append(("metric", values))
+
+
+class FakeExpander:
+    def __init__(self, calls):
+        self.calls = calls
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, traceback):
+        return False
+
+    def caption(self, value):
+        self.calls.append(("expander_caption", value))
+
+    def write(self, value):
+        self.calls.append(("expander_write", value))
 
 
 class FakeUploadedFile:
@@ -151,6 +172,25 @@ def test_render_analysis_uses_business_column_headings():
         "Why this matters",
         "What to answer next",
     ]
+
+
+def test_render_analysis_shows_scoring_evidence_when_available():
+    view_model = build_analysis_view_model(
+        "Warehouse operators record stock movement by item and quantity."
+    )
+    fake_st = FakeStreamlit()
+
+    _render_analysis(view_model, fake_st)
+
+    assert ("expander", "Why this score", False) in fake_st.calls
+    assert (
+        "expander_caption",
+        "local deterministic evidence checklist",
+    ) in fake_st.calls
+    assert any(
+        call[0] == "expander_write" and "Business problem:" in call[1]
+        for call in fake_st.calls
+    )
 
 
 def test_build_uploaded_sources_view_model_extracts_files_and_reports_errors():
