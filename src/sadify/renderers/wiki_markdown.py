@@ -17,6 +17,18 @@ class WikiNoteDraft:
     markdown: str
     linked_item_ids: tuple[str, ...]
 
+    def with_markdown(self, markdown: str) -> WikiNoteDraft:
+        return WikiNoteDraft(
+            item_id=self.item_id,
+            item_type=self.item_type,
+            slug=self.slug,
+            folder=self.folder,
+            file_name=self.file_name,
+            relative_path=self.relative_path,
+            markdown=markdown,
+            linked_item_ids=self.linked_item_ids,
+        )
+
 
 class WikiMarkdownRenderError(ValueError):
     pass
