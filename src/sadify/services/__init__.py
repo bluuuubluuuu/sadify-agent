@@ -1,5 +1,12 @@
 """Application services package."""
 
+from sadify.services.export_generation import (
+    ExportGenerationError,
+    ExportPackage,
+    PreparedExportArtifact,
+    prepare_export_package,
+    write_export_package,
+)
 from sadify.services.firestore_persistence import (
     FirestorePersistenceError,
     FirestoreRepository,
@@ -20,8 +27,11 @@ from sadify.services.wiki_verification import (
 )
 
 __all__ = [
+    "ExportGenerationError",
+    "ExportPackage",
     "FirestorePersistenceError",
     "FirestoreRepository",
+    "PreparedExportArtifact",
     "RelationshipGraph",
     "SadGenerationError",
     "WikiApprovalError",
@@ -30,7 +40,9 @@ __all__ = [
     "approve_wiki_draft",
     "build_requirement_graph",
     "generate_project_sad",
+    "prepare_export_package",
     "prepare_wiki_draft_for_approval",
     "reject_wiki_draft",
     "verify_wiki_note",
+    "write_export_package",
 ]
