@@ -11,6 +11,12 @@ from sadify.services.firestore_persistence import (
     FirestorePersistenceError,
     FirestoreRepository,
 )
+from sadify.services.local_end_to_end import (
+    LocalEndToEndError,
+    LocalEndToEndInput,
+    LocalEndToEndResult,
+    run_local_end_to_end,
+)
 from sadify.services.relationship_linking import (
     RelationshipGraph,
     build_requirement_graph,
@@ -31,6 +37,9 @@ __all__ = [
     "ExportPackage",
     "FirestorePersistenceError",
     "FirestoreRepository",
+    "LocalEndToEndError",
+    "LocalEndToEndInput",
+    "LocalEndToEndResult",
     "PreparedExportArtifact",
     "RelationshipGraph",
     "SadGenerationError",
@@ -43,6 +52,7 @@ __all__ = [
     "prepare_export_package",
     "prepare_wiki_draft_for_approval",
     "reject_wiki_draft",
+    "run_local_end_to_end",
     "verify_wiki_note",
     "write_export_package",
 ]
