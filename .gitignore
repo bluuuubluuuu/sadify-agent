@@ -34,6 +34,8 @@ build/
 node_modules/
 .npm/
 .pnpm-store/
+.playwright-cli/
+.worktrees/
 
 # Google Cloud and generated outputs
 .gcloud/
