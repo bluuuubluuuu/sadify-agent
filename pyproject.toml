@@ -22,6 +22,7 @@ dev = [
 [tool.pytest.ini_options]
 addopts = "-p no:cacheprovider"
 pythonpath = [
+    "services/api/src",
     "src",
     ".",
 ]
