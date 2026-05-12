@@ -1,8 +1,6 @@
+import { WorkspaceShell } from "../components/WorkspaceShell";
+import { mockWorkspaceState } from "../lib/mockState";
+
 export default function Home() {
-  return (
-    <main>
-      <h1>SADify</h1>
-      <p>Project workspace loading.</p>
-    </main>
-  );
+  return <WorkspaceShell state={mockWorkspaceState} />;
 }

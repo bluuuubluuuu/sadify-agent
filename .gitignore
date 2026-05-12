@@ -32,6 +32,7 @@ build/
 
 # Node/tooling caches, if Agents CLI or frontend tooling is used later
 node_modules/
+.next/
 .npm/
 .pnpm-store/
 .playwright-cli/
