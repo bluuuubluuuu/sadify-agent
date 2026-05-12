@@ -1,3 +1,4 @@
+import { AuthPanel } from "./AuthPanel";
 import type { WorkspaceState } from "../lib/mockState";
 import { ChangeSummary } from "./ChangeSummary";
 import { CurrentQuestion } from "./CurrentQuestion";
@@ -19,6 +20,8 @@ export function WorkspaceShell({ state }: Props) {
           {state.mode === "guest" ? "Guest draft" : "Signed in"}
         </span>
       </header>
+
+      <AuthPanel />
 
       <ChangeSummary
         summary={state.changeSummary}
