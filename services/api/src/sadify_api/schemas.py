@@ -78,11 +78,22 @@ class QuestionnaireCategory(ApiModel):
     status: Literal["complete", "partial", "missing"]
 
 
+class SlotEvidence(ApiModel):
+    category_id: str = Field(min_length=1)
+    slot_id: str = Field(min_length=1)
+    applicability: Literal["applicable", "not_applicable"] = "applicable"
+    strength: Literal["none", "partial", "strong"] = "none"
+    evidence_quote: str = ""
+    rationale: str = ""
+
+
 class QuestionnaireProgressCategory(ApiModel):
     id: str = Field(min_length=1)
     label: str = Field(min_length=1)
     status: Literal["ready", "in_progress", "needed", "needs_later_confirmation"]
-    visibility: Literal["main", "already_understood", "completed", "suggested"] = "main"
+    visibility: Literal[
+        "main", "already_understood", "completed", "suggested", "not_applicable"
+    ] = "main"
     progress: int = Field(ge=0, le=100)
     questions_total: int = Field(ge=1)
     questions_answered: int = Field(ge=0)
@@ -117,13 +128,17 @@ class QuestionnairePlanSlot(ApiModel):
     label: str = Field(min_length=1)
     required: bool = True
     status: Literal["open", "covered", "confirm_later"] = "open"
+    evidence_strength: Literal["none", "partial", "strong"] = "none"
+    applicable: bool = True
 
 
 class QuestionnairePlanCategory(ApiModel):
     id: str = Field(min_length=1)
     label: str = Field(min_length=1)
     display_order: int = Field(ge=1)
-    visibility: Literal["main", "already_understood", "completed", "suggested"] = "main"
+    visibility: Literal[
+        "main", "already_understood", "completed", "suggested", "not_applicable"
+    ] = "main"
     status: Literal["needs_answer", "in_progress", "ready", "confirm_later"]
     slots: list[QuestionnairePlanSlot] = Field(min_length=1)
 
@@ -183,6 +198,7 @@ class RequirementAnalysisResponse(ApiModel):
     assumptions: list[str]
     source_references: list[str]
     proposed_extra_categories: list[ProposedExtraCategory] = Field(default_factory=list)
+    slot_evidence: list[SlotEvidence] = Field(default_factory=list)
     questionnaire: QuestionnaireState | None = None
 
 
