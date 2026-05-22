@@ -11,20 +11,20 @@ def create_auth_router(token_verifier: TokenVerifier) -> APIRouter:
     def create_session(
         authorization: str | None = Header(default=None),
     ) -> AuthSessionResponse:
-        user = _verify_authorization_header(authorization, token_verifier)
+        user = verify_authorization_header(authorization, token_verifier)
         return AuthSessionResponse(status="authenticated", user=user)
 
     @router.get("/me", response_model=AuthSessionResponse)
     def get_me(
         authorization: str | None = Header(default=None),
     ) -> AuthSessionResponse:
-        user = _verify_authorization_header(authorization, token_verifier)
+        user = verify_authorization_header(authorization, token_verifier)
         return AuthSessionResponse(status="authenticated", user=user)
 
     return router
 
 
-def _verify_authorization_header(
+def verify_authorization_header(
     authorization: str | None,
     token_verifier: TokenVerifier,
 ) -> AuthenticatedUser:
@@ -49,3 +49,6 @@ def _verify_authorization_header(
         display_name=verified.display_name,
         provider=verified.provider,
     )
+
+
+_verify_authorization_header = verify_authorization_header

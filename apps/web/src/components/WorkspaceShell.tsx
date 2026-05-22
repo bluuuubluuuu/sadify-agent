@@ -1,42 +1,194 @@
+"use client";
+
+import { useState } from "react";
+import { AnalysisPanel } from "./AnalysisPanel";
 import { AuthPanel } from "./AuthPanel";
-import type { WorkspaceState } from "../lib/mockState";
+import type {
+  RequirementAnalysisApiResponse,
+  SadPreviewApiResponse,
+  SourceUploadResponse,
+} from "../lib/api";
+import type { CategoryStatus, WorkspaceState } from "../lib/mockState";
 import { ChangeSummary } from "./ChangeSummary";
-import { CurrentQuestion } from "./CurrentQuestion";
-import { ReadinessPanel } from "./ReadinessPanel";
+import { DraftPanel } from "./DraftPanel";
+import { DriveRepoPanel } from "./DriveRepoPanel";
+import { SadPreviewPanel } from "./SadPreviewPanel";
+import { SourceUploadPanel } from "./SourceUploadPanel";
 
 type Props = {
   state: WorkspaceState;
 };
 
 export function WorkspaceShell({ state }: Props) {
+  const [workspaceState, setWorkspaceState] = useState(state);
+  const [sourceUpload, setSourceUpload] = useState<SourceUploadResponse | null>(null);
+  const [analysisResponse, setAnalysisResponse] =
+    useState<RequirementAnalysisApiResponse | null>(null);
+  const [analysisRequirementText, setAnalysisRequirementText] = useState("");
+
+  function applyAnalysis(
+    response: RequirementAnalysisApiResponse,
+    cleanRequirementText: string,
+  ) {
+    const analysis = response.analysis;
+    const draftReadiness = analysis.questionnaire?.draft_readiness ?? analysis.readiness;
+    const categoryProgress = analysis.questionnaire?.categories.map((category) => ({
+      label: category.label,
+      status: category.status as CategoryStatus,
+      progress: category.progress,
+      questionsAnswered: category.questions_answered,
+      questionsTotal: category.questions_total,
+      isActive: category.is_active,
+    }));
+    setAnalysisResponse(response);
+    setAnalysisRequirementText(cleanRequirementText);
+    setWorkspaceState((current) => ({
+      ...current,
+      readinessLabel: draftReadiness.label,
+      readinessScore: draftReadiness.score,
+      confidenceLabel: analysis.readiness.confidence,
+      currentQuestion: {
+        text: analysis.next_question.text,
+        whyThisMatters: analysis.next_question.why_this_matters,
+        choices: analysis.next_question.choices,
+      },
+      categories:
+        categoryProgress ??
+        analysis.categories.map((category) => ({
+          label: category.label,
+          status: category.status as CategoryStatus,
+        })),
+      changeSummary: `Analysis ${response.analysis_id} saved. Next question refreshed from Gemini.`,
+      projectStatus: [
+        `Analysis state saved: ${response.analysis_id}`,
+        "Question choices ready",
+        "SAD preview not generated yet",
+        "Project repo not connected",
+      ],
+    }));
+  }
+
+  function applySadPreview(response: SadPreviewApiResponse) {
+    setWorkspaceState((current) => ({
+      ...current,
+      changeSummary: response.preview.change_tracking.summary,
+      projectStatus: [
+        `Temporary SAD preview saved: ${response.preview_id}`,
+        `IT readiness: ${response.preview.it_readiness.score}%`,
+        response.preview.open_questions.length
+          ? `${response.preview.open_questions.length} open question(s) visible`
+          : "No open questions returned",
+        "Project files not saved to Drive yet",
+      ],
+    }));
+  }
+
+  function applyAnswerSubmitted(
+    response: RequirementAnalysisApiResponse,
+    answerText: string,
+  ) {
+    setWorkspaceState((current) => ({
+      ...current,
+      changeSummary: "Answer saved. Next question refreshed from Gemini.",
+      projectStatus: [
+        `Answer added to analysis: ${response.analysis_id}`,
+        `Latest answer: ${answerText}`,
+        "Question choices ready",
+        "SAD preview can be regenerated",
+      ],
+    }));
+  }
+
+  function applyAnswerKeptForPreview(
+    response: RequirementAnalysisApiResponse,
+    cleanRequirementText: string,
+    answerText: string,
+  ) {
+    setAnalysisResponse(response);
+    setAnalysisRequirementText(cleanRequirementText);
+    setWorkspaceState((current) => ({
+      ...current,
+      changeSummary: "Answer kept for preview. Next question needs retry.",
+      projectStatus: [
+        `Answer kept with analysis: ${response.analysis_id}`,
+        `Latest answer: ${answerText}`,
+        "Next question did not refresh",
+        "SAD preview can use the kept answer",
+      ],
+    }));
+  }
+
+  function applySourceUpload(response: SourceUploadResponse) {
+    setSourceUpload(response);
+    const sourceIds = response.sources.map((source) => source.source_id);
+    setWorkspaceState((current) => ({
+      ...current,
+      changeSummary: `${response.sources.length} source file(s) extracted for traceability.`,
+      projectStatus: [
+        sourceIds.length
+          ? `Source context ready: ${sourceIds.join(", ")}`
+          : "No valid source files yet",
+        response.errors.length
+          ? `${response.errors.length} file(s) need a supported format`
+          : "All uploaded source files readable",
+        "SAD preview not generated yet",
+        "Project repo not connected",
+      ],
+    }));
+  }
+
+  const sourceContext = sourceUpload?.analysis_context ?? "";
+  const sourceReferences =
+    sourceUpload?.sources.map((source) => source.source_id) ?? [];
+
   return (
     <main className="workspace">
       <header className="workspace-header">
         <div>
           <p className="eyebrow">SADify</p>
-          <h1>{state.projectTitle}</h1>
+          <h1>{workspaceState.projectTitle}</h1>
         </div>
         <span className="mode-pill">
-          {state.mode === "guest" ? "Guest draft" : "Signed in"}
+          {workspaceState.mode === "guest" ? "Guest draft" : "Signed in"}
         </span>
       </header>
 
       <AuthPanel />
 
-      <ChangeSummary
-        summary={state.changeSummary}
-        projectStatus={state.projectStatus}
+      <DraftPanel />
+
+      <DriveRepoPanel />
+
+      <SourceUploadPanel onSourcesUploaded={applySourceUpload} />
+
+      <AnalysisPanel
+        onAnalysisSaved={applyAnalysis}
+        onAnswerSubmitted={applyAnswerSubmitted}
+        onAnswerKeptForPreview={applyAnswerKeptForPreview}
+        sourceContext={sourceContext}
+        sourceReferences={sourceReferences}
       />
 
-      <div className="workspace-grid">
-        <CurrentQuestion {...state.currentQuestion} />
-        <ReadinessPanel
-          readinessLabel={state.readinessLabel}
-          readinessScore={state.readinessScore}
-          confidenceLabel={state.confidenceLabel}
-          categories={state.categories}
-        />
-      </div>
+      <SadPreviewPanel
+        analysisResponse={analysisResponse}
+        requirementText={analysisRequirementText}
+        sourceContext={sourceContext}
+        sourceReferences={sourceReferences}
+        onPreviewSaved={applySadPreview}
+      />
+
+      <ChangeSummary
+        summary={workspaceState.changeSummary}
+        projectStatus={workspaceState.projectStatus}
+      />
+
+      {analysisResponse ? null : (
+        <section className="analysis-empty-state" aria-label="Analysis status">
+          <p className="eyebrow">Analysis status</p>
+          <strong>No analysis yet</strong>
+          <p>Start analysis to build the questionnaire for this draft.</p>
+        </section>
+      )}
     </main>
   );
 }

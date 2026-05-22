@@ -4,9 +4,17 @@ type Props = {
   text: string;
   whyThisMatters: string;
   choices: Choice[];
+  selectedChoiceId?: string;
+  onChoiceSelect?: (choiceId: string) => void;
 };
 
-export function CurrentQuestion({ text, whyThisMatters, choices }: Props) {
+export function CurrentQuestion({
+  text,
+  whyThisMatters,
+  choices,
+  selectedChoiceId = "",
+  onChoiceSelect,
+}: Props) {
   return (
     <section className="question-panel" aria-labelledby="current-question">
       <p className="eyebrow">Current question</p>
@@ -14,11 +22,32 @@ export function CurrentQuestion({ text, whyThisMatters, choices }: Props) {
       <p className="why">{whyThisMatters}</p>
 
       <div className="choice-grid" aria-label="Answer choices">
-        {choices.map((choice) => (
-          <button key={choice.id} type="button" className="choice-button">
-            {choice.label}
-          </button>
-        ))}
+        {choices.map((choice) => {
+          const choiceClassName = `choice-button ${
+            selectedChoiceId === choice.id ? "selected" : ""
+          }${choice.is_disabled ? " disabled-choice" : ""}${
+            onChoiceSelect ? "" : " read-only"
+          }`;
+
+          return onChoiceSelect ? (
+            <button
+              key={choice.id}
+              type="button"
+              className={choiceClassName}
+              aria-pressed={selectedChoiceId === choice.id}
+              disabled={choice.is_disabled}
+              onClick={() => onChoiceSelect(choice.id)}
+            >
+              <span>{choice.label}</span>
+              {choice.status_label ? <small>{choice.status_label}</small> : null}
+            </button>
+          ) : (
+            <div key={choice.id} className={choiceClassName} role="listitem">
+              <span>{choice.label}</span>
+              {choice.status_label ? <small>{choice.status_label}</small> : null}
+            </div>
+          );
+        })}
       </div>
 
       <label className="amend-field">

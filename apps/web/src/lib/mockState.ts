@@ -1,9 +1,18 @@
 export type Choice = {
   id: string;
   label: string;
+  is_disabled?: boolean;
+  status_label?: string;
 };
 
-export type CategoryStatus = "complete" | "partial" | "missing";
+export type CategoryStatus =
+  | "complete"
+  | "partial"
+  | "missing"
+  | "ready"
+  | "in_progress"
+  | "needed"
+  | "needs_later_confirmation";
 
 export type WorkspaceState = {
   projectTitle: string;
@@ -19,6 +28,10 @@ export type WorkspaceState = {
   categories: Array<{
     label: string;
     status: CategoryStatus;
+    progress?: number;
+    questionsAnswered?: number;
+    questionsTotal?: number;
+    isActive?: boolean;
   }>;
   changeSummary: string;
   projectStatus: string[];
@@ -27,27 +40,16 @@ export type WorkspaceState = {
 export const mockWorkspaceState: WorkspaceState = {
   projectTitle: "Guest draft",
   mode: "guest",
-  readinessLabel: "Getting started",
-  readinessScore: 35,
+  readinessLabel: "No analysis yet",
+  readinessScore: 0,
   confidenceLabel: "Medium",
   currentQuestion: {
-    text: "Who will use this system most often?",
-    whyThisMatters: "This helps SADify shape roles, permissions, and the daily workflow.",
-    choices: [
-      { id: "frontline", label: "Frontline staff" },
-      { id: "supervisors", label: "Supervisors or approvers" },
-      { id: "managers", label: "Managers or report viewers" },
-      { id: "not_sure", label: "Not sure yet" },
-    ],
+    text: "",
+    whyThisMatters: "",
+    choices: [],
   },
-  categories: [
-    { label: "Problem", status: "partial" },
-    { label: "Users and roles", status: "missing" },
-    { label: "Workflow", status: "missing" },
-    { label: "Data and files", status: "missing" },
-    { label: "Reports", status: "missing" },
-  ],
-  changeSummary: "1 draft started. No project files saved yet.",
+  categories: [],
+  changeSummary: "No analysis yet. No project files saved.",
   projectStatus: [
     "Guest draft active",
     "Questions in progress",

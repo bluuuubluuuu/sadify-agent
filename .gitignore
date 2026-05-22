@@ -37,6 +37,7 @@ node_modules/
 .pnpm-store/
 .playwright-cli/
 .worktrees/
+*.tsbuildinfo
 
 # Google Cloud and generated outputs
 .gcloud/

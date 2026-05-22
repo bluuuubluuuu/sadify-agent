@@ -30,10 +30,14 @@ def test_workspace_shell_renders_qna_readiness_and_tracking():
     )
 
     assert "WorkspaceShell" in page
-    assert "CurrentQuestion" in shell
-    assert "ReadinessPanel" in shell
+    assert "CurrentQuestion" not in shell
+    assert "No analysis yet" in shell
+    assert "analysis-empty-state" in shell
+    assert "ReadinessPanel" not in shell
     assert "ChangeSummary" in shell
-    assert "Who will use this system most often?" in mock_state
+    assert 'readinessLabel: "No analysis yet"' in mock_state
+    assert 'text: ""' in mock_state
+    assert "categories: []" in mock_state
     assert "Amend answer" in (WEB_SRC / "components" / "CurrentQuestion.tsx").read_text(
         encoding="utf-8"
     )

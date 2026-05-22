@@ -7,6 +7,10 @@ class ApiConfig:
     environment: str
     diagnostics_enabled: bool = True
     firebase_project_id: str | None = None
+    google_cloud_project: str | None = None
+    google_cloud_location: str = "global"
+    google_genai_use_vertexai: bool = True
+    sadify_model: str = "gemini-2.5-flash"
     allowed_origins: tuple[str, ...] = ("http://localhost:3000",)
 
 
@@ -17,6 +21,9 @@ def load_api_config() -> ApiConfig:
         or os.getenv("GOOGLE_CLOUD_PROJECT")
         or None
     )
+    google_cloud_project = os.getenv("GOOGLE_CLOUD_PROJECT") or firebase_project_id
+    google_cloud_location = os.getenv("GOOGLE_CLOUD_LOCATION", "global").strip()
+    sadify_model = os.getenv("SADIFY_MODEL", "gemini-2.5-flash").strip()
     diagnostics_enabled = _env_bool(
         "SADIFY_ENABLE_DIAGNOSTICS",
         default=environment.lower() != "production",
@@ -29,6 +36,10 @@ def load_api_config() -> ApiConfig:
         environment=environment,
         diagnostics_enabled=diagnostics_enabled,
         firebase_project_id=firebase_project_id,
+        google_cloud_project=google_cloud_project,
+        google_cloud_location=google_cloud_location or "global",
+        google_genai_use_vertexai=_env_bool("GOOGLE_GENAI_USE_VERTEXAI", default=True),
+        sadify_model=sadify_model or "gemini-2.5-flash",
         allowed_origins=allowed_origins,
     )
 
