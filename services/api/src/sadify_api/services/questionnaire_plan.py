@@ -114,6 +114,17 @@ _CATEGORY_BLUEPRINTS = (
 )
 
 
+def canonical_required_slots() -> list[tuple[str, str, str]]:
+    """Return (category_id, slot_id, label) for every required slot."""
+    entries: list[tuple[str, str, str]] = []
+    for blueprint in _CATEGORY_BLUEPRINTS:
+        category_id = str(blueprint["id"])
+        for slot_id, label, required in blueprint["slots"]:
+            if required:
+                entries.append((category_id, slot_id, label))
+    return entries
+
+
 def create_initial_plan(
     initial_facts: Mapping[str, Iterable[str]],
     *,

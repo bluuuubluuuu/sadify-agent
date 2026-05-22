@@ -159,6 +159,28 @@ def test_requirement_analysis_schema_is_vertex_compatible_and_small():
     }
 
 
+def test_analysis_schema_includes_slot_evidence():
+    schema = requirement_analysis_schema()
+    assert "slot_evidence" in schema["properties"]
+    assert "slot_evidence" in schema["required"]
+    item = schema["properties"]["slot_evidence"]["items"]
+    assert item["properties"]["strength"]["enum"] == ["none", "partial", "strong"]
+    assert item["properties"]["applicability"]["enum"] == [
+        "applicable",
+        "not_applicable",
+    ]
+
+
+def test_canonical_required_slots_lists_every_required_slot():
+    from sadify_api.services.questionnaire_plan import canonical_required_slots
+
+    slots = canonical_required_slots()
+    assert ("goal_scope", "business_goal") in {
+        (entry[0], entry[1]) for entry in slots
+    }
+    assert all(len(entry) == 3 for entry in slots)
+
+
 def test_sad_preview_prompt_guards_confirmed_facts_and_diagnostics():
     prompt = _sad_preview_prompt("Confirmed request facts:\nClinic flow", repair=False)
 

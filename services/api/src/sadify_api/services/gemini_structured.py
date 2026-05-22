@@ -2,6 +2,7 @@ from typing import Protocol
 
 from sadify_api.config import ApiConfig
 from sadify_api.schemas import RequirementAnalysisResponse, SadPreviewResponse
+from sadify_api.services.questionnaire_plan import canonical_required_slots
 
 
 class RequirementAnalysisModel(Protocol):
@@ -126,6 +127,42 @@ def requirement_analysis_schema() -> dict[str, object]:
                     "propertyOrdering": ["id", "label", "reason"],
                 },
             },
+            "slot_evidence": {
+                "type": "ARRAY",
+                "items": {
+                    "type": "OBJECT",
+                    "properties": {
+                        "category_id": {"type": "STRING"},
+                        "slot_id": {"type": "STRING"},
+                        "applicability": {
+                            "type": "STRING",
+                            "enum": ["applicable", "not_applicable"],
+                        },
+                        "strength": {
+                            "type": "STRING",
+                            "enum": ["none", "partial", "strong"],
+                        },
+                        "evidence_quote": {"type": "STRING"},
+                        "rationale": {"type": "STRING"},
+                    },
+                    "required": [
+                        "category_id",
+                        "slot_id",
+                        "applicability",
+                        "strength",
+                        "evidence_quote",
+                        "rationale",
+                    ],
+                    "propertyOrdering": [
+                        "category_id",
+                        "slot_id",
+                        "applicability",
+                        "strength",
+                        "evidence_quote",
+                        "rationale",
+                    ],
+                },
+            },
         },
         "required": [
             "understanding_summary",
@@ -135,6 +172,7 @@ def requirement_analysis_schema() -> dict[str, object]:
             "assumptions",
             "source_references",
             "proposed_extra_categories",
+            "slot_evidence",
         ],
         "propertyOrdering": [
             "understanding_summary",
@@ -144,6 +182,7 @@ def requirement_analysis_schema() -> dict[str, object]:
             "assumptions",
             "source_references",
             "proposed_extra_categories",
+            "slot_evidence",
         ],
     }
 
@@ -265,12 +304,30 @@ class GeminiRequirementAnalysisModel:
             contents=prompt,
             config={
                 "temperature": 0.2,
-                "max_output_tokens": 1800,
+                "max_output_tokens": 3000,
                 "response_mime_type": "application/json",
                 "response_schema": requirement_analysis_schema(),
             },
         )
         return response.text or ""
+
+
+def _slot_evidence_instructions() -> str:
+    slot_lines = "\n".join(
+        f"- {category_id}.{slot_id}: {label}"
+        for category_id, slot_id, label in canonical_required_slots()
+    )
+    return (
+        "Also return slot_evidence: one verdict for every required slot listed "
+        "below. For each slot decide applicability (applicable or "
+        "not_applicable for this project), then strength of support from the "
+        "supplied material (strong = clearly and specifically stated, partial = "
+        "only hinted or vague, none = not covered). For partial or strong, "
+        "copy a verbatim evidence_quote from the supplied material; leave it "
+        "empty for none or not_applicable. Keep rationale to one short "
+        "sentence. Required slots:\n"
+        f"{slot_lines}"
+    )
 
 
 def _analysis_prompt(requirement_text: str, *, repair: bool) -> str:
@@ -297,6 +354,7 @@ def _analysis_prompt(requirement_text: str, *, repair: bool) -> str:
         "Keep assumptions visible and short. "
         "Use source_references only for business source labels such as uploaded "
         "files or Business Request. Never cite Previous Answer as a source.\n\n"
+        f"{_slot_evidence_instructions()}\n\n"
         "Business request:\n"
         f"{requirement_text}"
     )
