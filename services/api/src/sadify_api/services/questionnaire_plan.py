@@ -305,8 +305,10 @@ def recalculate_readiness(plan: QuestionnairePlan) -> QuestionnairePlan:
 
 
 def _slot_weight(slot: QuestionnairePlanSlot) -> float:
-    if slot.status == "confirm_later":
-        return 1.0
+    # Deferring a slot ("confirm_later") parks the question for later but does
+    # NOT earn readiness credit on its own — score still tracks the underlying
+    # evidence. The SAD-preview gate decides separately whether deferred gaps
+    # block the draft.
     if slot.evidence_strength == "strong":
         return 1.0
     if slot.evidence_strength == "partial":

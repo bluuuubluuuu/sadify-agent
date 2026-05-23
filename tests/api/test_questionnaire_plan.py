@@ -71,6 +71,28 @@ def test_deferred_slots_can_be_reopened_without_touching_other_categories():
     assert reopened.category("users_roles").status == "needs_answer"
 
 
+def test_deferring_every_required_slot_does_not_grant_readiness():
+    """Deferring without evidence must not auto-grant readiness (F1: defer != covered)."""
+    plan = create_initial_plan(initial_facts={})
+    for category in plan.categories:
+        for slot in category.slots:
+            if slot.required:
+                plan = defer_slot(plan, category.id, slot.id)
+
+    assert plan.overall_readiness.score == 0
+
+
+def test_partial_evidence_score_is_half():
+    """F3 sanity: partial evidence weights 0.5, so a single partial slot in an
+    otherwise empty plan moves the score off zero by exactly that fraction."""
+    plan = create_plan_from_evidence(
+        [SlotEvidence(category_id="goal_scope", slot_id="business_goal",
+                      strength="partial", evidence_quote="q")]
+    )
+    # 19 required applicable slots total; one at 0.5 → 100 * 0.5 / 19 ≈ 3.
+    assert plan.overall_readiness.score == round(100 * 0.5 / 19)
+
+
 def _verdict(category_id, slot_id, strength, applicability="applicable"):
     return SlotEvidence(
         category_id=category_id,

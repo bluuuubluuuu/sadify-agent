@@ -98,6 +98,10 @@ class QuestionnaireProgressCategory(ApiModel):
     questions_total: int = Field(ge=1)
     questions_answered: int = Field(ge=0)
     is_active: bool = False
+    # Weakest evidence among required applicable slots. Lets the SAD-preview
+    # gate distinguish "in_progress (partial-only)" from "in_progress (has
+    # a slot with no evidence)" without changing slot data on the wire.
+    weakest_slot_strength: Literal["none", "partial", "strong"] = "strong"
 
 
 class QuestionnaireAnswer(ApiModel):

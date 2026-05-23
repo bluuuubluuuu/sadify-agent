@@ -14,6 +14,7 @@ from sadify_api.services.gemini_structured import (
 )
 from sadify_api.services.questionnaire_plan import (
     CANONICAL_CATEGORY_IDS,
+    _slot_weight,
     cover_slot,
     create_initial_plan,
     create_plan_from_evidence,
@@ -867,6 +868,25 @@ def _slot_for_answer(plan, answer: dict[str, object]):
     return _next_open_slot_in_category(plan, category_id)
 
 
+_STRENGTH_RANK = {"none": 0, "partial": 1, "strong": 2}
+
+
+def _weakest_slot_strength(slots) -> str:
+    """Return the weakest evidence strength among the given slots.
+
+    A user-deferred ('confirm_later') slot is intentional and is treated as
+    'strong' for the purpose of this signal — defer should not look like a
+    missing-evidence gap to the SAD-preview gate.
+    """
+    strengths = [
+        "strong" if slot.status == "confirm_later" else slot.evidence_strength
+        for slot in slots
+    ]
+    if not strengths:
+        return "strong"
+    return min(strengths, key=lambda s: _STRENGTH_RANK.get(s, 2))
+
+
 def _questionnaire_categories_from_plan(plan) -> list[dict[str, object]]:
     status_map = {
         "needs_answer": "needed",
@@ -877,10 +897,17 @@ def _questionnaire_categories_from_plan(plan) -> list[dict[str, object]]:
     categories: list[dict[str, object]] = []
     for category in sorted(plan.categories, key=lambda item: item.display_order):
         required_slots = [slot for slot in category.slots if slot.required]
+        applicable_required = [slot for slot in required_slots if slot.applicable]
         covered_slots = [slot for slot in required_slots if slot.status == "covered"]
+        # F3: per-category progress mirrors the global weighted score so the
+        # headline % and the per-row % cannot contradict each other.
         progress = (
-            round(100 * len(covered_slots) / len(required_slots))
-            if required_slots
+            round(
+                100
+                * sum(_slot_weight(slot) for slot in applicable_required)
+                / len(applicable_required)
+            )
+            if applicable_required
             else 100
         )
         categories.append(
@@ -893,6 +920,7 @@ def _questionnaire_categories_from_plan(plan) -> list[dict[str, object]]:
                 "questions_total": len(required_slots),
                 "questions_answered": len(covered_slots),
                 "is_active": category.id == plan.active_category_id,
+                "weakest_slot_strength": _weakest_slot_strength(applicable_required),
             }
         )
     return categories

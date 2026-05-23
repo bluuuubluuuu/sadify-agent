@@ -11,6 +11,7 @@ from sadify_api.services.sad_preview import (
     SadPreviewRepository,
     build_safe_sad_fallback_preview,
     build_sad_preview_context,
+    missing_blocking_basics,
 )
 from sadify_api.services.gemini_structured import (
     SadPreviewModel,
@@ -178,6 +179,46 @@ def test_sad_preview_api_blocks_when_basics_are_missing():
     assert model.requests == []
 
 
+def test_missing_blocking_basics_passes_when_high_score_has_only_in_progress_categories():
+    """F4: a category with mixed strong+partial evidence is `in_progress`, not `ready`.
+    When the overall score is >=90 and the questionnaire reports good coverage, the
+    gate must pass even though the legacy `analysis.categories` block is missing."""
+    analysis_dict = VALID_ANALYSIS.copy()
+    analysis_dict["readiness"] = {"label": "Ready for draft", "score": 94, "confidence": "High"}
+    analysis_dict["understanding_summary"] = "Brief summary."
+    analysis_dict["categories"] = [
+        {"id": "problem", "label": "Problem", "status": "missing"},
+        {"id": "goal", "label": "Goal", "status": "missing"},
+        {"id": "users_roles", "label": "Users and roles", "status": "missing"},
+        {"id": "workflow", "label": "Workflow", "status": "missing"},
+    ]
+    analysis_dict["questionnaire"] = {
+        "draft_readiness": {"label": "Ready for draft", "score": 94, "confidence": "High"},
+        "active_category_id": "goal_scope",
+        "active_slot_id": "in_scope_outcome",
+        "active_slot_label": "In-scope outcome",
+        "categories": [
+            {
+                "id": "goal_scope", "label": "Goal", "status": "in_progress",
+                "visibility": "main", "progress": 75,
+                "questions_total": 2, "questions_answered": 1, "is_active": True,
+                "weakest_slot_strength": "partial",
+            },
+            {
+                "id": "users_roles", "label": "Users", "status": "ready",
+                "visibility": "completed", "progress": 100,
+                "questions_total": 2, "questions_answered": 2, "is_active": False,
+                "weakest_slot_strength": "strong",
+            },
+        ],
+        "answers": [],
+        "diagnostics": [],
+    }
+    analysis = RequirementAnalysisResponse.model_validate(analysis_dict)
+
+    assert missing_blocking_basics(analysis, requirement_text="A team needs a system.") == []
+
+
 def test_missing_blocking_basics_blocks_when_a_required_slot_has_no_evidence():
     """Draft-ready needs >=90 score AND no applicable required slot at none."""
     from sadify_api.schemas import SlotEvidence
@@ -241,6 +282,15 @@ def test_missing_blocking_basics_blocks_when_a_required_slot_has_no_evidence():
                     for slot in category.slots
                 ),
                 "is_active": category.id == plan.active_category_id,
+                "weakest_slot_strength": min(
+                    (
+                        slot.evidence_strength
+                        for slot in category.slots
+                        if slot.required and slot.applicable
+                    ),
+                    key=lambda s: {"none": 0, "partial": 1, "strong": 2}.get(s, 2),
+                    default="strong",
+                ),
             }
             for category in plan.categories
         ],

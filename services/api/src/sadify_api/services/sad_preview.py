@@ -130,7 +130,11 @@ def missing_blocking_basics(
         analysis.questionnaire is not None
         and analysis.questionnaire.draft_readiness.score >= 90
         and all(
-            category.status in ("ready", "needs_later_confirmation")
+            # F4: gate honours the spec — score >= 90 AND no applicable
+            # required slot is at evidence_strength "none". A category at
+            # status "in_progress" carrying only partial evidence is fine;
+            # a category whose weakest slot is "none" still blocks.
+            category.weakest_slot_strength in ("partial", "strong")
             for category in analysis.questionnaire.categories
         )
     ):
