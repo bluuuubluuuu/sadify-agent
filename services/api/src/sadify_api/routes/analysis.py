@@ -1,3 +1,5 @@
+import logging
+
 from fastapi import APIRouter, HTTPException
 from pydantic import ValidationError
 
@@ -53,6 +55,9 @@ LEGACY_TO_CANONICAL_CATEGORY_IDS = {
 }
 
 
+logger = logging.getLogger(__name__)
+
+
 class QuestionnaireDriftError(Exception):
     """Raised when Gemini returns structurally valid but workflow-invalid output."""
 
@@ -69,6 +74,7 @@ def create_analysis_router(
     ) -> RequirementAnalysisApiResponse:
         locked_target = _locked_target_for_request(request)
         for repair in (False, True):
+            raw_json = ""
             try:
                 model_requirement_text = _build_model_requirement_text(
                     request,
@@ -91,9 +97,24 @@ def create_analysis_router(
                     request,
                     fallback_used=False,
                 )
-            except (ValidationError, QuestionnaireDriftError):
+            except (ValidationError, QuestionnaireDriftError) as exc:
+                # Diagnostic: capture WHY Gemini output was rejected so we can
+                # tell schema mismatches apart from token truncation in logs.
+                logger.warning(
+                    "analysis_validation_failed repair=%s err=%s raw_len=%d raw_head=%r raw_tail=%r",
+                    repair,
+                    f"{type(exc).__name__}: {_safe_exception_message(exc)}",
+                    len(raw_json),
+                    raw_json[:600],
+                    raw_json[-400:] if len(raw_json) > 1000 else "",
+                )
                 continue
             except Exception as exc:
+                logger.exception(
+                    "analysis_call_failed repair=%s raw_len=%d",
+                    repair,
+                    len(raw_json),
+                )
                 raise HTTPException(
                     status_code=502,
                     detail=f"Gemini analysis failed: {_safe_exception_message(exc)}",

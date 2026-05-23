@@ -1,5 +1,9 @@
+import logging
+
 from fastapi import APIRouter, HTTPException
 from pydantic import ValidationError
+
+logger = logging.getLogger(__name__)
 
 from sadify_api.schemas import (
     SadPreviewApiResponse,
@@ -50,14 +54,27 @@ def create_sad_router(
             source_references=request.source_references,
         )
         for repair in (False, True):
+            raw_json = ""
             try:
+                raw_json = model.generate_preview(context, repair=repair)
                 preview = with_requested_source_references(
-                    parse_sad_preview(model.generate_preview(context, repair=repair)),
+                    parse_sad_preview(raw_json),
                     request.source_references,
                 )
-            except ValidationError:
+            except ValidationError as exc:
+                logger.warning(
+                    "sad_preview_validation_failed repair=%s err=%s raw_len=%d raw_head=%r raw_tail=%r",
+                    repair,
+                    f"{type(exc).__name__}: {str(exc)[:500]}",
+                    len(raw_json),
+                    raw_json[:600],
+                    raw_json[-400:] if len(raw_json) > 1000 else "",
+                )
                 continue
             except Exception as exc:
+                logger.exception(
+                    "sad_preview_call_failed repair=%s raw_len=%d", repair, len(raw_json)
+                )
                 raise HTTPException(
                     status_code=502,
                     detail="Gemini SAD preview failed.",
