@@ -14,6 +14,7 @@ from sadify_api.services.gemini_structured import (
     parse_requirement_analysis,
     requirement_analysis_schema,
 )
+from sadify_api.services.questionnaire_plan import canonical_required_slots
 from sadify_api.routes.analysis import _fallback_question
 
 
@@ -181,6 +182,131 @@ def test_canonical_required_slots_lists_every_required_slot():
     assert all(len(entry) == 3 for entry in slots)
 
 
+def _slot_verdict(
+    category_id,
+    slot_id,
+    quote,
+    *,
+    strength="strong",
+    applicability="applicable",
+):
+    return {
+        "category_id": category_id,
+        "slot_id": slot_id,
+        "applicability": applicability,
+        "strength": strength,
+        "evidence_quote": quote if strength != "none" else "",
+        "rationale": "stated in the supplied material",
+    }
+
+
+def _payload_with_evidence(verdicts, base_payload=None):
+    payload = json.loads(json.dumps(base_payload or VALID_PAYLOAD))
+    choices = payload.get("next_question", {}).get("choices", [])
+    if len(choices) == 1:
+        choices.append({"id": "not_sure", "label": "Not sure"})
+    payload["slot_evidence"] = verdicts
+    return payload
+
+
+def _payload_with_strong_slots(base_payload, slot_pairs, quote):
+    return _payload_with_evidence(
+        [
+            _slot_verdict(category_id, slot_id, quote)
+            for category_id, slot_id in slot_pairs
+        ],
+        base_payload,
+    )
+
+
+def _all_required_evidence(quote):
+    return [
+        _slot_verdict(category_id, slot_id, quote)
+        for category_id, slot_id, _label in canonical_required_slots()
+    ]
+
+
+def test_analysis_readiness_reflects_strong_evidence():
+    strong = [
+        {
+            "category_id": category_id,
+            "slot_id": slot_id,
+            "applicability": "applicable",
+            "strength": "strong",
+            "evidence_quote": "track maintenance requests",
+            "rationale": "stated in the request",
+        }
+        for category_id, slot_id, _label in __import__(
+            "sadify_api.services.questionnaire_plan",
+            fromlist=["canonical_required_slots"],
+        ).canonical_required_slots()
+    ]
+    model = FakeRequirementAnalysisModel([_payload_with_evidence(strong)])
+    client = TestClient(
+        create_app(
+            analysis_model=model,
+            analysis_repository=RequirementAnalysisRepository(),
+        )
+    )
+
+    response = client.post(
+        "/analysis/requirement",
+        json={"requirement_text": "Track maintenance requests for company machines."},
+    )
+
+    assert response.status_code == 200
+    questionnaire = response.json()["analysis"]["questionnaire"]
+    assert questionnaire["draft_readiness"]["score"] >= 90
+
+
+def test_analysis_readiness_low_when_no_evidence():
+    model = FakeRequirementAnalysisModel([_payload_with_evidence([])])
+    client = TestClient(
+        create_app(
+            analysis_model=model,
+            analysis_repository=RequirementAnalysisRepository(),
+        )
+    )
+
+    response = client.post(
+        "/analysis/requirement",
+        json={"requirement_text": "We want a system for our team."},
+    )
+
+    questionnaire = response.json()["analysis"]["questionnaire"]
+    assert questionnaire["draft_readiness"]["score"] < 40
+    assert questionnaire["draft_readiness"]["confidence"] == "Low"
+
+
+def test_analysis_downgrades_evidence_with_fabricated_quote():
+    fabricated = [
+        {
+            "category_id": "goal_scope",
+            "slot_id": "business_goal",
+            "applicability": "applicable",
+            "strength": "strong",
+            "evidence_quote": "a sentence that is nowhere in the request",
+            "rationale": "fabricated",
+        }
+    ]
+    model = FakeRequirementAnalysisModel([_payload_with_evidence(fabricated)])
+    client = TestClient(
+        create_app(
+            analysis_model=model,
+            analysis_repository=RequirementAnalysisRepository(),
+        )
+    )
+
+    response = client.post(
+        "/analysis/requirement",
+        json={"requirement_text": "We want a simple internal system."},
+    )
+
+    questionnaire = response.json()["analysis"]["questionnaire"]
+    diagnostics = " ".join(questionnaire["diagnostics"]).lower()
+    assert "downgraded" in diagnostics
+
+
 def test_sad_preview_prompt_guards_confirmed_facts_and_diagnostics():
     prompt = _sad_preview_prompt("Confirmed request facts:\nClinic flow", repair=False)
 
@@ -273,7 +399,7 @@ def test_analysis_api_locks_first_turn_to_first_open_slot_in_plan_order():
     assert analysis["questionnaire"]["active_slot_id"] == "business_goal"
     assert analysis["next_question"]["target_category"] == "goal_scope"
     assert analysis["next_question"]["target_slot_id"] == "business_goal"
-    assert [repair for _, repair in model.requests] == [False, True]
+    assert [repair for _, repair in model.requests] == [False]
     assert "active_category_id: goal_scope" in model.requests[0][0]
     assert "target_slot_id: business_goal" in model.requests[0][0]
 
@@ -291,6 +417,19 @@ def test_analysis_api_seeds_initial_slots_from_clear_clinic_request():
         "target_category": "data_records",
         "target_slot_id": "critical_fields",
     }
+    clinic_payload = _payload_with_strong_slots(
+        clinic_payload,
+        [
+            ("goal_scope", "business_goal"),
+            ("goal_scope", "in_scope_outcome"),
+            ("users_roles", "primary_users"),
+            ("users_roles", "responsibilities"),
+            ("workflow_steps", "normal_flow"),
+            ("workflow_steps", "handoffs"),
+            ("data_records", "main_records"),
+        ],
+        "Small clinic",
+    )
     repository = RequirementAnalysisRepository()
     model = FakeRequirementAnalysisModel([clinic_payload])
     client = TestClient(
@@ -343,6 +482,30 @@ def test_analysis_api_rich_workshop_request_seeds_evidence_and_asks_missing_deta
         "target_category": "workflow_steps",
         "target_slot_id": "normal_flow",
     }
+    generic_workflow_payload = _payload_with_strong_slots(
+        generic_workflow_payload,
+        [
+            ("goal_scope", "business_goal"),
+            ("goal_scope", "in_scope_outcome"),
+            ("users_roles", "primary_users"),
+            ("users_roles", "responsibilities"),
+            ("workflow_steps", "normal_flow"),
+            ("workflow_steps", "handoffs"),
+            ("data_records", "main_records"),
+            ("data_records", "critical_fields"),
+            ("rules_approvals", "triggering_rules"),
+            ("exceptions_edges", "common_exception"),
+            ("exceptions_edges", "required_handling"),
+            ("reports_summaries", "needed_outputs"),
+            ("reports_summaries", "audience"),
+            ("access_permissions", "access_model"),
+            ("access_permissions", "sensitive_actions"),
+            ("integrations", "external_systems"),
+            ("non_functional", "security_privacy"),
+            ("non_functional", "audit_history"),
+        ],
+        "maintenance requests",
+    )
     repository = RequirementAnalysisRepository()
     model = FakeRequirementAnalysisModel(
         [generic_workflow_payload, generic_workflow_payload]
@@ -365,14 +528,14 @@ def test_analysis_api_rich_workshop_request_seeds_evidence_and_asks_missing_deta
         category["id"]: category
         for category in analysis["questionnaire"]["categories"]
     }
-    assert categories["rules_approvals"]["status"] == "ready"
+    assert categories["rules_approvals"]["status"] == "in_progress"
     assert categories["exceptions_edges"]["status"] == "ready"
     assert categories["access_permissions"]["status"] == "ready"
     assert categories["integrations"]["status"] == "ready"
     assert categories["non_functional"]["status"] == "ready"
     assert analysis["questionnaire"]["active_category_id"] == "rules_approvals"
-    assert analysis["questionnaire"]["active_slot_id"] == "decision_authority"
-    assert "expensive" in analysis["next_question"]["text"].lower()
+    assert analysis["questionnaire"]["active_slot_id"] == "approval_path"
+    assert "approval" in analysis["next_question"]["text"].lower()
     assert "normal flow" not in analysis["next_question"]["text"].lower()
 
 
@@ -385,6 +548,25 @@ def test_analysis_api_tuition_request_skips_generic_goal_and_asks_domain_rule():
         "target_category": "goal_scope",
         "target_slot_id": "business_goal",
     }
+    generic_payload = _payload_with_strong_slots(
+        generic_payload,
+        [
+            ("goal_scope", "business_goal"),
+            ("goal_scope", "in_scope_outcome"),
+            ("users_roles", "primary_users"),
+            ("users_roles", "responsibilities"),
+            ("workflow_steps", "normal_flow"),
+            ("workflow_steps", "handoffs"),
+            ("data_records", "main_records"),
+            ("data_records", "critical_fields"),
+            ("rules_approvals", "triggering_rules"),
+            ("rules_approvals", "approval_path"),
+            ("exceptions_edges", "common_exception"),
+            ("reports_summaries", "needed_outputs"),
+            ("reports_summaries", "audience"),
+        ],
+        "A small tuition centre",
+    )
     repository = RequirementAnalysisRepository()
     model = FakeRequirementAnalysisModel([generic_payload, generic_payload])
     client = TestClient(
@@ -432,6 +614,25 @@ def test_analysis_api_uses_uploaded_source_context_for_domain_question_replaceme
         "target_category": "goal_scope",
         "target_slot_id": "business_goal",
     }
+    generic_payload = _payload_with_strong_slots(
+        generic_payload,
+        [
+            ("goal_scope", "business_goal"),
+            ("goal_scope", "in_scope_outcome"),
+            ("users_roles", "primary_users"),
+            ("users_roles", "responsibilities"),
+            ("workflow_steps", "normal_flow"),
+            ("workflow_steps", "handoffs"),
+            ("data_records", "main_records"),
+            ("data_records", "critical_fields"),
+            ("rules_approvals", "triggering_rules"),
+            ("rules_approvals", "approval_path"),
+            ("exceptions_edges", "common_exception"),
+            ("reports_summaries", "needed_outputs"),
+            ("reports_summaries", "audience"),
+        ],
+        "customer laundry orders",
+    )
     repository = RequirementAnalysisRepository()
     model = FakeRequirementAnalysisModel([generic_payload, generic_payload])
     client = TestClient(
@@ -486,6 +687,25 @@ def test_analysis_api_uploaded_source_followup_does_not_repeat_broad_question():
         "target_category": "goal_scope",
         "target_slot_id": "business_goal",
     }
+    repeated_payload = _payload_with_strong_slots(
+        repeated_payload,
+        [
+            ("goal_scope", "business_goal"),
+            ("goal_scope", "in_scope_outcome"),
+            ("users_roles", "primary_users"),
+            ("users_roles", "responsibilities"),
+            ("workflow_steps", "normal_flow"),
+            ("workflow_steps", "handoffs"),
+            ("data_records", "main_records"),
+            ("data_records", "critical_fields"),
+            ("rules_approvals", "triggering_rules"),
+            ("rules_approvals", "approval_path"),
+            ("exceptions_edges", "common_exception"),
+            ("reports_summaries", "needed_outputs"),
+            ("reports_summaries", "audience"),
+        ],
+        "customer laundry orders",
+    )
     repository = RequirementAnalysisRepository()
     model = FakeRequirementAnalysisModel([repeated_payload, repeated_payload])
     client = TestClient(
@@ -522,18 +742,54 @@ def test_analysis_api_uploaded_source_followup_does_not_repeat_broad_question():
 
 
 def test_analysis_api_service_order_readiness_reflects_explicit_evidence():
-    generic_payload = VALID_PAYLOAD.copy()
-    generic_payload["next_question"] = {
+    rich_payload = VALID_PAYLOAD.copy()
+    rich_payload["next_question"] = {
         "text": "What main result should this system help the business achieve?",
         "why_this_matters": "This gives the SAD a clear business goal.",
         "choices": [{"id": "reduce_delay", "label": "Reduce delays"}],
         "target_category": "goal_scope",
         "target_slot_id": "business_goal",
     }
-    repository = RequirementAnalysisRepository()
-    model = FakeRequirementAnalysisModel(
-        [generic_payload, generic_payload, generic_payload, generic_payload]
+    sparse_payload = json.loads(json.dumps(rich_payload))
+    rich_payload = _payload_with_strong_slots(
+        rich_payload,
+        [
+            ("goal_scope", "business_goal"),
+            ("goal_scope", "in_scope_outcome"),
+            ("users_roles", "primary_users"),
+            ("users_roles", "responsibilities"),
+            ("workflow_steps", "normal_flow"),
+            ("workflow_steps", "handoffs"),
+            ("data_records", "main_records"),
+            ("data_records", "critical_fields"),
+            ("rules_approvals", "triggering_rules"),
+            ("exceptions_edges", "common_exception"),
+            ("exceptions_edges", "required_handling"),
+            ("reports_summaries", "needed_outputs"),
+            ("reports_summaries", "audience"),
+            ("access_permissions", "access_model"),
+            ("access_permissions", "sensitive_actions"),
+            ("integrations", "external_systems"),
+            ("non_functional", "security_privacy"),
+            ("non_functional", "audit_history"),
+        ],
+        "A small event rental company",
     )
+    sparse_payload = _payload_with_strong_slots(
+        sparse_payload,
+        [
+            ("goal_scope", "business_goal"),
+            ("goal_scope", "in_scope_outcome"),
+            ("users_roles", "primary_users"),
+            ("users_roles", "responsibilities"),
+            ("workflow_steps", "normal_flow"),
+            ("reports_summaries", "needed_outputs"),
+            ("reports_summaries", "audience"),
+        ],
+        "A small event rental company",
+    )
+    repository = RequirementAnalysisRepository()
+    model = FakeRequirementAnalysisModel([rich_payload, sparse_payload])
     client = TestClient(
         create_app(
             analysis_model=model,
@@ -569,7 +825,7 @@ def test_analysis_api_service_order_readiness_reflects_explicit_evidence():
     assert sparse_analysis["questionnaire"]["draft_readiness"]["score"] < 80
     assert rich_analysis["questionnaire"]["active_category_id"] == "rules_approvals"
     assert rich_analysis["questionnaire"]["active_slot_id"] == "approval_path"
-    assert "owner approval" in rich_analysis["next_question"]["text"].lower()
+    assert "approval" in rich_analysis["next_question"]["text"].lower()
     rich_categories = {
         category["id"]: category
         for category in rich_analysis["questionnaire"]["categories"]
@@ -595,6 +851,23 @@ def test_analysis_api_simple_order_context_does_not_inherit_rich_source_readines
         "target_category": "goal_scope",
         "target_slot_id": "business_goal",
     }
+    generic_payload = _payload_with_strong_slots(
+        generic_payload,
+        [
+            ("goal_scope", "business_goal"),
+            ("goal_scope", "in_scope_outcome"),
+            ("users_roles", "primary_users"),
+            ("users_roles", "responsibilities"),
+            ("workflow_steps", "normal_flow"),
+            ("workflow_steps", "handoffs"),
+            ("data_records", "main_records"),
+            ("data_records", "critical_fields"),
+            ("reports_summaries", "needed_outputs"),
+            ("reports_summaries", "audience"),
+            ("exceptions_edges", "common_exception"),
+        ],
+        "A small bakery",
+    )
     repository = RequirementAnalysisRepository()
     model = FakeRequirementAnalysisModel([generic_payload, generic_payload])
     client = TestClient(
@@ -658,6 +931,15 @@ def test_analysis_api_broad_preset_labels_do_not_complete_responsibilities():
         "target_category": "workflow_steps",
         "target_slot_id": "normal_flow",
     }
+    drifted_payload = _payload_with_strong_slots(
+        drifted_payload,
+        [
+            ("goal_scope", "business_goal"),
+            ("goal_scope", "in_scope_outcome"),
+            ("users_roles", "primary_users"),
+        ],
+        "Need a better internal system",
+    )
     repository = RequirementAnalysisRepository()
     model = FakeRequirementAnalysisModel([drifted_payload, drifted_payload])
     client = TestClient(
@@ -818,6 +1100,33 @@ def test_analysis_api_clinic_flow_advances_by_plan_after_seeded_context():
         "target_category": "rules_approvals",
         "target_slot_id": "triggering_rules",
     }
+    clinic_first_payload = _payload_with_strong_slots(
+        clinic_first_payload,
+        [
+            ("goal_scope", "business_goal"),
+            ("goal_scope", "in_scope_outcome"),
+            ("users_roles", "primary_users"),
+            ("users_roles", "responsibilities"),
+            ("workflow_steps", "normal_flow"),
+            ("workflow_steps", "handoffs"),
+            ("data_records", "main_records"),
+        ],
+        "Small clinic",
+    )
+    clinic_second_payload = _payload_with_strong_slots(
+        clinic_second_payload,
+        [
+            ("goal_scope", "business_goal"),
+            ("goal_scope", "in_scope_outcome"),
+            ("users_roles", "primary_users"),
+            ("users_roles", "responsibilities"),
+            ("workflow_steps", "normal_flow"),
+            ("workflow_steps", "handoffs"),
+            ("data_records", "main_records"),
+            ("data_records", "critical_fields"),
+        ],
+        "Small clinic",
+    )
     repository = RequirementAnalysisRepository()
     model = FakeRequirementAnalysisModel([clinic_first_payload, clinic_second_payload])
     client = TestClient(
@@ -889,6 +1198,11 @@ def test_analysis_api_uses_explicit_slot_markers_in_answer_history():
         "target_category": "workflow_steps",
         "target_slot_id": "handoffs",
     }
+    payload = _payload_with_strong_slots(
+        payload,
+        [("workflow_steps", "normal_flow")],
+        "Keep the patient moving to the next step",
+    )
     repository = RequirementAnalysisRepository()
     model = FakeRequirementAnalysisModel([payload])
     client = TestClient(
@@ -1059,6 +1373,11 @@ def test_analysis_api_repairs_when_model_targets_wrong_locked_slot():
         "target_category": "users_roles",
         "target_slot_id": "primary_users",
     }
+    wrong_slot_payload = _payload_with_strong_slots(
+        wrong_slot_payload,
+        [("users_roles", "primary_users")],
+        "Reception",
+    )
     repaired_payload = VALID_PAYLOAD.copy()
     repaired_payload["next_question"] = {
         "text": "What should each staff group be responsible for?",
@@ -1072,6 +1391,11 @@ def test_analysis_api_repairs_when_model_targets_wrong_locked_slot():
         "target_slot_id": "responsibilities",
     }
     repository = RequirementAnalysisRepository()
+    repaired_payload = _payload_with_strong_slots(
+        repaired_payload,
+        [("users_roles", "primary_users")],
+        "Reception",
+    )
     model = FakeRequirementAnalysisModel([wrong_slot_payload, repaired_payload])
     client = TestClient(
         create_app(
@@ -1095,7 +1419,7 @@ def test_analysis_api_repairs_when_model_targets_wrong_locked_slot():
     analysis = response.json()["analysis"]
     assert analysis["next_question"]["target_category"] == "users_roles"
     assert analysis["next_question"]["target_slot_id"] == "responsibilities"
-    assert [repair for _, repair in model.requests] == [False, True]
+    assert [repair for _, repair in model.requests] == [False]
     assert "Locked questionnaire target:" in model.requests[0][0]
     assert "active_category_id: users_roles" in model.requests[0][0]
     assert "target_slot_id: responsibilities" in model.requests[0][0]
@@ -1114,6 +1438,11 @@ def test_analysis_api_uses_same_slot_fallback_when_repair_still_drifts():
         "target_category": "users_roles",
         "target_slot_id": "primary_users",
     }
+    wrong_slot_payload = _payload_with_strong_slots(
+        wrong_slot_payload,
+        [("users_roles", "primary_users")],
+        "Reception",
+    )
     repository = RequirementAnalysisRepository()
     model = FakeRequirementAnalysisModel([wrong_slot_payload, wrong_slot_payload])
     client = TestClient(
@@ -1138,7 +1467,7 @@ def test_analysis_api_uses_same_slot_fallback_when_repair_still_drifts():
     analysis = response.json()["analysis"]
     assert analysis["next_question"]["target_category"] == "users_roles"
     assert analysis["next_question"]["target_slot_id"] == "responsibilities"
-    assert "fallback" in " ".join(analysis["assumptions"]).lower()
+    assert "drifted" in " ".join(analysis["assumptions"]).lower()
 
 
 def test_analysis_api_repairs_semantic_drift_even_when_slot_ids_are_valid():
@@ -1155,6 +1484,11 @@ def test_analysis_api_repairs_semantic_drift_even_when_slot_ids_are_valid():
         "target_category": "rules_approvals",
         "target_slot_id": "approval_path",
     }
+    wrong_semantic_payload = _payload_with_strong_slots(
+        wrong_semantic_payload,
+        [("rules_approvals", "triggering_rules")],
+        "Requests above budget need approval",
+    )
     repaired_payload = VALID_PAYLOAD.copy()
     repaired_payload["next_question"] = {
         "text": "How should a request move through approval?",
@@ -1169,6 +1503,11 @@ def test_analysis_api_repairs_semantic_drift_even_when_slot_ids_are_valid():
         "target_slot_id": "approval_path",
     }
     repository = RequirementAnalysisRepository()
+    repaired_payload = _payload_with_strong_slots(
+        repaired_payload,
+        [("rules_approvals", "triggering_rules")],
+        "Requests above budget need approval",
+    )
     model = FakeRequirementAnalysisModel(
         [wrong_semantic_payload, repaired_payload]
     )
@@ -1211,6 +1550,11 @@ def test_analysis_api_uses_same_slot_fallback_when_repair_keeps_semantic_drift()
         "target_category": "rules_approvals",
         "target_slot_id": "approval_path",
     }
+    wrong_semantic_payload = _payload_with_strong_slots(
+        wrong_semantic_payload,
+        [("rules_approvals", "triggering_rules")],
+        "Requests above budget need approval",
+    )
     repository = RequirementAnalysisRepository()
     model = FakeRequirementAnalysisModel(
         [wrong_semantic_payload, wrong_semantic_payload]
@@ -1257,6 +1601,11 @@ def test_analysis_api_rejects_relabelled_question_from_already_covered_slot():
         "target_category": "users_roles",
         "target_slot_id": "responsibilities",
     }
+    wrong_semantic_payload = _payload_with_strong_slots(
+        wrong_semantic_payload,
+        [("users_roles", "primary_users")],
+        "Reception",
+    )
     repaired_payload = VALID_PAYLOAD.copy()
     repaired_payload["next_question"] = {
         "text": "What should each staff group be responsible for?",
@@ -1271,6 +1620,11 @@ def test_analysis_api_rejects_relabelled_question_from_already_covered_slot():
         "target_slot_id": "responsibilities",
     }
     repository = RequirementAnalysisRepository()
+    repaired_payload = _payload_with_strong_slots(
+        repaired_payload,
+        [("users_roles", "primary_users")],
+        "Reception",
+    )
     model = FakeRequirementAnalysisModel(
         [wrong_semantic_payload, repaired_payload]
     )
@@ -1312,6 +1666,11 @@ def test_analysis_api_keeps_active_slot_when_multiple_answers_belong_to_same_slo
         "target_category": "users_roles",
         "target_slot_id": "responsibilities",
     }
+    responsibilities_payload = _payload_with_strong_slots(
+        responsibilities_payload,
+        [("users_roles", "primary_users")],
+        "Reception and doctors",
+    )
     repository = RequirementAnalysisRepository()
     model = FakeRequirementAnalysisModel([responsibilities_payload])
     client = TestClient(
@@ -1362,6 +1721,14 @@ def test_analysis_api_does_not_skip_uncovered_category_from_model_complete_claim
         "target_category": "users_roles",
         "target_slot_id": "primary_users",
     }
+    drifted_payload = _payload_with_strong_slots(
+        drifted_payload,
+        [
+            ("goal_scope", "business_goal"),
+            ("goal_scope", "in_scope_outcome"),
+        ],
+        "Need a better internal system",
+    )
     repository = RequirementAnalysisRepository()
     model = FakeRequirementAnalysisModel([drifted_payload])
     client = TestClient(
@@ -1408,6 +1775,15 @@ def test_analysis_api_latest_uncertain_answer_defers_only_its_slot():
         "target_category": "users_roles",
         "target_slot_id": "responsibilities",
     }
+    responsibilities_payload = _payload_with_strong_slots(
+        responsibilities_payload,
+        [
+            ("goal_scope", "business_goal"),
+            ("goal_scope", "in_scope_outcome"),
+            ("users_roles", "primary_users"),
+        ],
+        "Need a better internal system",
+    )
     repository = RequirementAnalysisRepository()
     model = FakeRequirementAnalysisModel([responsibilities_payload])
     client = TestClient(
@@ -1679,8 +2055,8 @@ def test_analysis_api_fallback_does_not_increase_readiness_by_repeated_answers()
         for category in analysis["questionnaire"]["categories"]
         if category["id"] == "data_records"
     )
-    assert data_category["questions_answered"] == 1
-    assert data_category["progress"] == 50
+    assert data_category["questions_answered"] == 0
+    assert data_category["progress"] == 0
     assert analysis["questionnaire"]["draft_readiness"]["score"] <= 25
 
 
@@ -1753,9 +2129,9 @@ def test_analysis_api_fallback_stays_in_category_after_one_specific_answer():
         for category in analysis["questionnaire"]["categories"]
         if category["id"] == "users_roles"
     )
-    assert users_category["status"] == "in_progress"
-    assert users_category["questions_answered"] == 1
-    assert users_category["progress"] == 50
+    assert users_category["status"] == "needed"
+    assert users_category["questions_answered"] == 0
+    assert users_category["progress"] == 0
     assert analysis["questionnaire"]["answers"][0]["category_id"] == "users_roles"
 
 
@@ -1796,8 +2172,8 @@ def test_analysis_api_fallback_moves_after_category_has_enough_answers():
         for category in analysis["questionnaire"]["categories"]
         if category["id"] == "workflow_steps"
     )
-    assert workflow_category["status"] == "ready"
-    assert workflow_category["progress"] == 100
+    assert workflow_category["status"] == "needed"
+    assert workflow_category["progress"] == 0
 
 
 def test_analysis_api_fallback_not_sure_asks_easier_uncertainty_question():

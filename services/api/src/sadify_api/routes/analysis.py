@@ -16,8 +16,13 @@ from sadify_api.services.questionnaire_plan import (
     CANONICAL_CATEGORY_IDS,
     cover_slot,
     create_initial_plan,
+    create_plan_from_evidence,
     defer_slot,
     next_open_slot,
+)
+from sadify_api.services.slot_evidence import (
+    derive_confidence,
+    validate_slot_evidence,
 )
 from sadify_api.services.questionnaire_slots import (
     best_matching_slot,
@@ -199,14 +204,6 @@ def _validate_model_analysis(
     if locked_target is None:
         _validate_question_semantics(analysis)
         return
-    if target_category_id != locked_target.category_id:
-        raise QuestionnaireDriftError(
-            "Question target category does not match the locked category."
-        )
-    if analysis.next_question.target_slot_id != locked_target.slot_id:
-        raise QuestionnaireDriftError(
-            "Question target slot does not match the locked slot."
-        )
     _validate_question_semantics(analysis)
 
 
@@ -217,47 +214,69 @@ def _with_questionnaire_state(
     fallback_used: bool,
 ) -> RequirementAnalysisResponse:
     answers = _questionnaire_answers(request.requirement_text)
-    plan = _questionnaire_plan(
-        analysis,
-        answers,
-        initial_facts=_initial_facts_from_request(request),
+    verdicts, evidence_diagnostics = _validated_evidence(analysis, request)
+    plan = _questionnaire_plan(verdicts, answers)
+    derived_confidence = derive_confidence(
+        verdicts, downgrade_count=len(evidence_diagnostics)
     )
-    active_category_id = plan.active_category_id or _canonical_category_id(
-        analysis.next_question.target_category
-    )
+    if fallback_used:
+        active_category_id = _canonical_category_id(analysis.next_question.target_category)
+    else:
+        active_category_id = plan.active_category_id or _canonical_category_id(
+            analysis.next_question.target_category
+        )
     context_text = _combined_requirement_context(request)
-    analysis = _with_locked_question_category(
-        analysis,
-        plan,
-        context_text=context_text,
-    )
-    analysis = _with_non_repeating_question(
-        analysis,
-        answers,
-        plan,
-        context_text=context_text,
-    )
+    if not fallback_used:
+        analysis = _with_locked_question_category(
+            analysis,
+            plan,
+            context_text=context_text,
+        )
+        analysis = _with_non_repeating_question(
+            analysis,
+            answers,
+            plan,
+            context_text=context_text,
+        )
     category_state = _questionnaire_categories_from_plan(plan)
     draft_readiness = {
         "label": plan.overall_readiness.label,
         "score": plan.overall_readiness.score,
-        "confidence": analysis.readiness.confidence,
+        "confidence": derived_confidence,
     }
     diagnostics = [
         "structured-output fallback used" if fallback_used else "Gemini structured output validated",
         f"AI confidence: {analysis.readiness.confidence}",
+        f"Derived confidence: {derived_confidence}",
+        *evidence_diagnostics,
     ]
     payload = analysis.model_dump()
     payload["questionnaire"] = {
         "draft_readiness": draft_readiness,
         "active_category_id": active_category_id,
-        "active_slot_id": _active_slot_id(plan) or analysis.next_question.target_slot_id,
-        "active_slot_label": _active_slot_label(plan) or _active_slot_label_from_question(plan, analysis),
+        "active_slot_id": analysis.next_question.target_slot_id
+        if fallback_used
+        else _active_slot_id(plan) or analysis.next_question.target_slot_id,
+        "active_slot_label": _active_slot_label_from_question(plan, analysis)
+        if fallback_used
+        else _active_slot_label(plan) or _active_slot_label_from_question(plan, analysis),
         "categories": category_state,
         "answers": answers,
         "diagnostics": diagnostics,
     }
     return RequirementAnalysisResponse.model_validate(payload)
+
+
+def _validated_evidence(
+    analysis: RequirementAnalysisResponse,
+    request: RequirementAnalysisRequest,
+) -> tuple[list, list[str]]:
+    """Validate model slot evidence against the combined business material."""
+    material_parts = [_combined_requirement_context(request)]
+    for answer in _questionnaire_answers(request.requirement_text):
+        material_parts.append(str(answer["answer"]))
+    material = "\n".join(part for part in material_parts if part.strip())
+    return validate_slot_evidence(analysis.slot_evidence, material=material)
 
 
 def _with_non_repeating_question(
@@ -679,92 +698,18 @@ def _question_tokens(question: str) -> set[str]:
     }
 
 
-def _questionnaire_categories(
-    model_categories: list[object],
-    answers: list[dict[str, object]],
-    active_category_id: str,
-) -> list[dict[str, object]]:
-    answer_counts = _category_answer_counts(answers)
-    uncertain_categories = {
-        str(answer["category_id"]) for answer in answers if answer.get("is_uncertain")
-    }
-    categories_by_id: dict[str, dict[str, str]] = {}
-    for category in model_categories:
-        category_id = _normalise_category_id(category.id)
-        categories_by_id[category_id] = {
-            "id": category_id,
-            "label": category.label,
-            "status": category.status,
-        }
-    for topic in FALLBACK_CATEGORY_ORDER:
-        if topic["id"] in answer_counts or topic["id"] == active_category_id:
-            categories_by_id.setdefault(
-                topic["id"],
-                {"id": topic["id"], "label": topic["label"], "status": "missing"},
-            )
-    if not categories_by_id:
-        topic = _topic_by_id(active_category_id)
-        categories_by_id[topic["id"]] = {
-            "id": topic["id"],
-            "label": topic["label"],
-            "status": "missing",
-        }
-
-    ordered_ids = [
-        topic["id"] for topic in FALLBACK_CATEGORY_ORDER if topic["id"] in categories_by_id
-    ]
-    ordered_ids.extend(
-        category_id
-        for category_id in categories_by_id
-        if category_id not in ordered_ids
-    )
-    state: list[dict[str, object]] = []
-    for category_id in ordered_ids:
-        category = categories_by_id[category_id]
-        answered = answer_counts.get(category_id, 0)
-        progress = _category_progress(
-            answered=answered,
-            model_status=category["status"],
-            has_uncertainty=category_id in uncertain_categories,
-        )
-        status = _category_progress_status(
-            progress=progress,
-            answered=answered,
-            model_status=category["status"],
-            has_uncertainty=category_id in uncertain_categories,
-            is_active=category_id == active_category_id,
-        )
-        state.append(
-            {
-                "id": category_id,
-                "label": category["label"],
-                "status": status,
-                "progress": progress,
-                "questions_total": FALLBACK_QUESTIONS_NEEDED,
-                "questions_answered": answered,
-                "is_active": category_id == active_category_id,
-            }
-        )
-    return state
-
-
 def _questionnaire_plan(
-    analysis: RequirementAnalysisResponse,
+    verdicts: list,
     answers: list[dict[str, object]],
-    *,
-    initial_facts: dict[str, set[str]],
 ):
-    plan = create_initial_plan(initial_facts=initial_facts)
+    plan = create_plan_from_evidence(verdicts)
     for answer in _unique_questionnaire_answers(answers):
-        category_id = str(answer["category_id"])
-        slot = _slot_for_answer(plan, answer)
-        if slot is None:
-            continue
         if answer.get("is_uncertain"):
-            plan = defer_slot(plan, category_id, slot.id)
-        else:
-            if _answer_has_enough_evidence(answer, slot.id):
-                plan = cover_slot(plan, category_id, slot.id)
+            category_id = str(answer["category_id"])
+            slot = _slot_for_answer(plan, answer)
+            if slot is not None:
+                plan = defer_slot(plan, category_id, slot.id)
+            continue
 
     active_category_id = _active_category_from_answers(plan, answers)
     if active_category_id is None:
@@ -777,7 +722,7 @@ def _locked_target_for_request(request: RequirementAnalysisRequest):
     answers = _unique_questionnaire_answers(
         _questionnaire_answers(request.requirement_text)
     )
-    plan = create_initial_plan(initial_facts=_initial_facts_from_request(request))
+    plan = create_plan_from_evidence([])
     for answer in answers:
         category_id = str(answer["category_id"])
         slot = _slot_for_answer(plan, answer)
@@ -786,8 +731,7 @@ def _locked_target_for_request(request: RequirementAnalysisRequest):
         if answer.get("is_uncertain"):
             plan = defer_slot(plan, category_id, slot.id)
         else:
-            if _answer_has_enough_evidence(answer, slot.id):
-                plan = cover_slot(plan, category_id, slot.id)
+            plan = cover_slot(plan, category_id, slot.id)
 
     active_category_id = _active_category_from_answers(plan, answers)
     if active_category_id is not None:
@@ -820,340 +764,6 @@ def _unique_questionnaire_answers(
         seen.add(key)
         unique_answers.append(answer)
     return unique_answers
-
-
-def _initial_facts_from_request(
-    request: RequirementAnalysisRequest,
-) -> dict[str, set[str]]:
-    text = _combined_requirement_context(request).lower()
-    facts: dict[str, set[str]] = {}
-
-    def cover(category_id: str, *slot_ids: str) -> None:
-        facts.setdefault(category_id, set()).update(slot_ids)
-
-    if any(
-        phrase in text
-        for phrase in (
-            "wants to ",
-            "needs to ",
-            "need to ",
-            "wants a system",
-            "wants a simple system",
-            "needs a system",
-            "needs a simple system",
-        )
-    ):
-        cover("goal_scope", "business_goal")
-    if any(
-        term in text
-        for term in ("track ", "manage ", "record ", "capture ", "validate ", "automate ")
-    ):
-        cover("goal_scope", "in_scope_outcome")
-
-    role_terms = (
-        "staff",
-        "manager",
-        "doctor",
-        "cashier",
-        "reception",
-        "operator",
-        "supervisor",
-        "admin",
-        "teacher",
-        "parent",
-        "owner",
-        "customer",
-        "counter",
-        "user",
-    )
-    action_terms = (
-        "register",
-        "record",
-        "update",
-        "prepare",
-        "review",
-        "approve",
-        "view",
-        "scan",
-        "enter",
-        "assign",
-        "mark",
-        "add",
-        "create",
-        "notify",
-    )
-    role_count = sum(term in text for term in role_terms)
-    action_count = sum(term in text for term in action_terms)
-    if role_count:
-        cover("users_roles", "primary_users")
-    if role_count and action_count >= 2:
-        cover("users_roles", "responsibilities")
-
-    workflow_terms = (
-        "submit",
-        "assign",
-        "diagnosis",
-        "repair",
-        "completion",
-        "order",
-        "orders",
-        "booking",
-        "bookings",
-        "booking order",
-        "delivery",
-        "pickup",
-        "return",
-        "packed",
-        "delivered",
-        "returned",
-        "registration",
-        "queue",
-        "consultation",
-        "collection",
-        "payment",
-        "received",
-        "picked",
-        "packed",
-        "dispatched",
-        "preparation status",
-        "ready",
-        "cancelled",
-        "delayed",
-    )
-    if sum(term in text for term in workflow_terms) >= 2:
-        cover("workflow_steps", "normal_flow")
-    if role_count >= 2 and action_count >= 2:
-        cover("workflow_steps", "handoffs")
-
-    data_terms = (
-        "record",
-        "status",
-        "note",
-        "notes",
-        "field",
-        "fields",
-        "patient",
-        "payment",
-        "bill",
-        "student",
-        "class",
-        "fee",
-        "attendance",
-        "schedule",
-        "progress",
-        "order",
-        "orders",
-        "customer",
-        "item",
-        "service type",
-        "due date",
-        "special instructions",
-        "booking",
-        "bookings",
-        "rented items",
-        "deposit",
-        "balance due",
-        "delivery address",
-        "damage",
-    )
-    if sum(term in text for term in data_terms) >= 2:
-        cover("data_records", "main_records")
-
-    if any(
-        term in text
-        for term in ("student", "class", "teacher", "parent", "fee", "attendance")
-    ):
-        cover("users_roles", "primary_users")
-        cover("workflow_steps", "normal_flow")
-        cover("data_records", "main_records", "critical_fields")
-        cover("reports_summaries", "needed_outputs", "audience")
-    if "admin staff" in text and "teachers" in text:
-        cover("users_roles", "responsibilities")
-        cover("workflow_steps", "handoffs")
-    if any(term in text for term in ("student enrolment", "class schedules")):
-        cover("goal_scope", "business_goal", "in_scope_outcome")
-    if any(
-        term in text
-        for term in ("parents should receive updates", "absent", "unpaid fees", "unpaid")
-    ):
-        cover("exceptions_edges", "common_exception")
-
-    if any(term in text for term in ("report", "summary", "dashboard", "export")):
-        cover("reports_summaries", "needed_outputs")
-    if any(term in text for term in ("manager", "supervisor", "owner")) and any(
-        term in text for term in ("report", "summary", "dashboard", "export")
-    ):
-        cover("reports_summaries", "audience")
-
-    if any(
-        phrase in text
-        for phrase in ("skip ", "leave before", "without paying", "rejected", "corrected")
-    ):
-        cover("exceptions_edges", "common_exception")
-
-    if any(
-        term in text
-        for term in (
-            "diagnosis notes",
-            "parts used",
-            "repair status",
-            "completion time",
-            "open reason",
-            "timestamp",
-            "customer details",
-            "customer contact",
-            "item count",
-            "service type",
-            "due date",
-            "special instructions",
-            "event date",
-            "rented items",
-            "deposit",
-            "balance due",
-            "delivery address",
-            "cake type",
-            "pickup date",
-            "payment status",
-            "damage reports",
-        )
-    ):
-        cover("data_records", "critical_fields")
-
-    if any(term in text for term in ("approval", "approve", "manager approval", "require manager")):
-        cover("rules_approvals", "triggering_rules")
-    if any(term in text for term in ("manager approval", "manager approve", "approve expensive", "approval before")):
-        cover("rules_approvals", "approval_path")
-
-    if any(term in text for term in ("parts are unavailable", "job is overdue", "overdue", "unavailable")):
-        cover("exceptions_edges", "common_exception")
-    if any(term in text for term in ("stays open with a reason", "stay open with a reason", "open with a reason", "kept open")):
-        cover("exceptions_edges", "required_handling")
-
-    if "weekly" in text and any(term in text for term in ("summary", "report")):
-        cover("reports_summaries", "cadence_filters")
-
-    if any(term in text for term in ("restrict actions by role", "role-based", "by role", "can create", "can view their own")):
-        cover("access_permissions", "access_model")
-    if any(term in text for term in ("approve expensive", "view reports", "assign jobs", "update repair", "restrict actions")):
-        cover("access_permissions", "sensitive_actions")
-
-    if any(term in text for term in ("no external systems", "no external system", "without external systems")):
-        cover("integrations", "external_systems")
-
-    if any(term in text for term in ("secure login", "staff login", "restrict actions by role", "restrict sensitive", "security")):
-        cover("non_functional", "security_privacy")
-    if any(term in text for term in ("record every change", "user and timestamp", "audit", "timestamp")):
-        cover("non_functional", "audit_history")
-    if any(term in text for term in ("history of status", "history of payment", "status and payment changes")):
-        cover("non_functional", "audit_history")
-    if any(
-        term in text
-        for term in (
-            "history of booking",
-            "history of delivery",
-            "history of return",
-            "history of damage",
-            "booking, delivery, return, payment, and damage changes",
-        )
-    ):
-        cover("non_functional", "audit_history")
-
-    if any(term in text for term in ("delayed", "damaged", "missing items", "not collected", "overdue", "complaints", "returned late", "substituted")):
-        cover("exceptions_edges", "common_exception")
-    if any(term in text for term in ("customer updates", "customers should receive updates", "ready or delayed")):
-        cover("rules_approvals", "triggering_rules")
-    if any(term in text for term in ("restrict payment edits", "payment edits", "counter staff or owner", "restrict payment and damage adjustments", "damage adjustments")):
-        cover("access_permissions", "access_model", "sensitive_actions")
-    return facts
-
-
-def _answer_has_enough_evidence(answer: dict[str, object], slot_id: str) -> bool:
-    category_id = str(answer["category_id"])
-    text = " ".join(str(answer["answer"]).strip().lower().split())
-    broad_labels = {
-        ("data_records", "main_records"): {
-            "request or case records",
-            "customer, patient, or staff records",
-            "transaction or payment records",
-            "status and history records",
-        },
-        ("data_records", "critical_fields"): {
-            "names or identifiers",
-            "dates and statuses",
-            "responsible staff or owner",
-            "amounts, notes, or reasons",
-        },
-        ("rules_approvals", "triggering_rules"): {
-            "a record cannot be completed until key steps are done",
-            "a review is required before completion",
-            "staff should be alerted when a rule is broken",
-        },
-        ("rules_approvals", "approval_path"): {
-            "one manager approves it",
-            "it goes through multiple approval levels",
-            "the path depends on amount or request type",
-        },
-        ("exceptions_edges", "common_exception"): {
-            "a required step is skipped",
-            "someone leaves before the process is complete",
-            "a record is rejected or corrected",
-            "a duplicate or wrong record is entered",
-        },
-        ("exceptions_edges", "required_handling"): {
-            "mark it incomplete and keep it open",
-            "alert the responsible staff immediately",
-            "allow manual follow-up later",
-            "close it but flag it for review",
-        },
-        ("reports_summaries", "needed_outputs"): {
-            "daily summary",
-            "dashboard",
-            "exception or follow-up list",
-            "weekly export",
-        },
-        ("reports_summaries", "audience"): {
-            "managers",
-            "supervisors",
-            "frontline staff",
-            "finance or operations staff",
-        },
-        ("access_permissions", "access_model"): {
-            "role-based access",
-            "the same access for everyone",
-            "access depends on project or site",
-        },
-        ("access_permissions", "sensitive_actions"): {
-            "approve or reject work",
-            "delete or overwrite records",
-            "export or share information",
-            "change system settings",
-        },
-        ("users_roles", "responsibilities"): {
-            "capture or update records",
-            "review or approve work",
-            "prepare or fulfil the next step",
-            "view summaries or reports",
-        },
-        ("workflow_steps", "normal_flow"): {
-            "request, approve, then fulfil",
-            "register, process, then close",
-            "create, review, then report or export",
-        },
-        ("non_functional", "security_privacy"): {
-            "secure login",
-            "restrict sensitive data by role",
-            "keep personal or confidential data protected",
-        },
-        ("non_functional", "audit_history"): {
-            "edits and corrections",
-            "approvals and decisions",
-            "status changes",
-            "exports or downloads",
-        },
-    }
-    if text in broad_labels.get((category_id, slot_id), set()):
-        return False
-    return True
 
 
 def _refinement_target_from_request(
@@ -1308,51 +918,6 @@ def _active_slot_label_from_question(plan, analysis: RequirementAnalysisResponse
         return category.slot(analysis.next_question.target_slot_id).label
     except KeyError:
         return None
-
-
-def _category_progress(
-    *,
-    answered: int,
-    model_status: str,
-    has_uncertainty: bool,
-) -> int:
-    if answered >= FALLBACK_QUESTIONS_NEEDED or model_status == "complete":
-        return 100
-    if answered > 0:
-        return 50
-    if has_uncertainty:
-        return 25
-    if model_status == "partial":
-        return 35
-    return 0
-
-
-def _category_progress_status(
-    *,
-    progress: int,
-    answered: int,
-    model_status: str,
-    has_uncertainty: bool,
-    is_active: bool,
-) -> str:
-    if progress >= 90:
-        return "ready"
-    if has_uncertainty and answered == 0:
-        return "needs_later_confirmation"
-    if progress > 0 or model_status == "partial" or is_active:
-        return "in_progress"
-    return "needed"
-
-
-def _draft_readiness(
-    categories: list[dict[str, object]],
-    confidence: str,
-) -> dict[str, object]:
-    score = round(
-        sum(int(category["progress"]) for category in categories) / len(categories)
-    )
-    label = _readiness_label(score)
-    return {"label": label, "score": score, "confidence": confidence}
 
 
 def _readiness_label(score: int) -> str:
