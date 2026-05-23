@@ -304,7 +304,12 @@ class GeminiRequirementAnalysisModel:
             contents=prompt,
             config={
                 "temperature": 0.2,
-                "max_output_tokens": 3000,
+                "max_output_tokens": 8000,
+                # gemini-2.5-flash thinking tokens share the output budget and
+                # were silently consuming most of it, leaving JSON truncated
+                # mid-property. Structured output does not benefit from
+                # thinking, so disable it.
+                "thinking_config": {"thinking_budget": 0},
                 "response_mime_type": "application/json",
                 "response_schema": requirement_analysis_schema(),
             },
@@ -380,7 +385,10 @@ class GeminiSadPreviewModel:
             contents=prompt,
             config={
                 "temperature": 0.2,
-                "max_output_tokens": 3000,
+                "max_output_tokens": 8000,
+                # See analysis call: 2.5-flash thinking shares the output
+                # budget and starves the JSON response.
+                "thinking_config": {"thinking_budget": 0},
                 "response_mime_type": "application/json",
                 "response_schema": sad_preview_schema(),
             },
