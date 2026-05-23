@@ -178,6 +178,100 @@ def test_sad_preview_api_blocks_when_basics_are_missing():
     assert model.requests == []
 
 
+def test_missing_blocking_basics_blocks_when_a_required_slot_has_no_evidence():
+    """Draft-ready needs >=90 score AND no applicable required slot at none."""
+    from sadify_api.schemas import SlotEvidence
+    from sadify_api.services.questionnaire_plan import (
+        canonical_required_slots,
+        create_plan_from_evidence,
+    )
+
+    slots = canonical_required_slots()
+    verdicts = [
+        SlotEvidence(
+            category_id=category_id,
+            slot_id=slot_id,
+            strength="strong",
+            evidence_quote="q",
+        )
+        for category_id, slot_id, _label in slots[:-1]
+    ]
+    verdicts.append(
+        SlotEvidence(
+            category_id=slots[-1][0],
+            slot_id=slots[-1][1],
+            strength="none",
+        )
+    )
+    plan = create_plan_from_evidence(verdicts)
+    assert any(
+        slot.required and slot.applicable and slot.evidence_strength == "none"
+        for category in plan.categories
+        for slot in category.slots
+    )
+
+    analysis = VALID_ANALYSIS.copy()
+    analysis["categories"] = [
+        {"id": "problem", "label": "Problem", "status": "missing"},
+        {"id": "goal", "label": "Goal", "status": "missing"},
+        {"id": "users_roles", "label": "Users and roles", "status": "missing"},
+        {"id": "workflow", "label": "Workflow", "status": "missing"},
+    ]
+    analysis["questionnaire"] = {
+        "draft_readiness": {
+            "label": plan.overall_readiness.label,
+            "score": plan.overall_readiness.score,
+            "confidence": "Medium",
+        },
+        "active_category_id": plan.active_category_id or slots[-1][0],
+        "active_slot_id": slots[-1][1],
+        "active_slot_label": slots[-1][2],
+        "categories": [
+            {
+                "id": category.id,
+                "label": category.label,
+                "status": _questionnaire_status(category.status),
+                "visibility": (
+                    "completed" if category.status == "ready" else "main"
+                ),
+                "progress": _questionnaire_progress(category),
+                "questions_total": sum(slot.required for slot in category.slots),
+                "questions_answered": sum(
+                    slot.required and slot.status == "covered"
+                    for slot in category.slots
+                ),
+                "is_active": category.id == plan.active_category_id,
+            }
+            for category in plan.categories
+        ],
+        "answers": [],
+        "diagnostics": ["Gemini structured output validated"],
+    }
+    repository = SadPreviewRepository()
+    model = FakeSadPreviewModel([VALID_PREVIEW.copy()])
+    client = TestClient(
+        create_app(
+            sad_preview_model=model,
+            sad_preview_repository=repository,
+        )
+    )
+
+    response = client.post(
+        "/sad/preview",
+        json={
+            "requirement_text": "Need a system.",
+            "analysis_id": "AN-000001",
+            "analysis": analysis,
+            "source_references": [],
+        },
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["missing_basics"]
+    assert repository.get_preview("SP-000001") is None
+    assert model.requests == []
+
+
 def test_sad_preview_api_allows_rich_request_when_one_question_state_is_still_incomplete():
     repository = SadPreviewRepository()
     model = FakeSadPreviewModel([VALID_PREVIEW.copy()])
@@ -1088,3 +1182,22 @@ def _ready_questionnaire_categories() -> list[dict[str, object]]:
             ("non_functional", "Non-functional needs"),
         ]
     ]
+
+
+def _questionnaire_status(plan_status: str) -> str:
+    return {
+        "needs_answer": "needed",
+        "in_progress": "in_progress",
+        "ready": "ready",
+        "confirm_later": "needs_later_confirmation",
+    }[plan_status]
+
+
+def _questionnaire_progress(category) -> int:
+    required_slots = [slot for slot in category.slots if slot.required]
+    if not required_slots:
+        return 100
+    covered_slots = [
+        slot for slot in required_slots if slot.status == "covered"
+    ]
+    return round(100 * len(covered_slots) / len(required_slots))

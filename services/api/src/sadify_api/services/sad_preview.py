@@ -129,6 +129,10 @@ def missing_blocking_basics(
     if (
         analysis.questionnaire is not None
         and analysis.questionnaire.draft_readiness.score >= 90
+        and all(
+            category.status in ("ready", "needs_later_confirmation")
+            for category in analysis.questionnaire.categories
+        )
     ):
         return []
 
