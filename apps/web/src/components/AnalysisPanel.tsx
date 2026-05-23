@@ -183,6 +183,10 @@ export function AnalysisPanel({
   const completedCategories =
     questionnaire?.categories.filter((category) => category.visibility === "completed") ??
     [];
+  const notApplicableCategories =
+    questionnaire?.categories.filter(
+      (category) => category.visibility === "not_applicable",
+    ) ?? [];
   const suggestedAdditions = analysis?.proposed_extra_categories ?? [];
   const isQuestionnaireReady =
     Boolean(questionnaire) &&
@@ -410,6 +414,17 @@ export function AnalysisPanel({
                   <summary>Completed areas</summary>
                   <ul>
                     {completedCategories.map((category) => (
+                      <li key={category.id}>{category.label}</li>
+                    ))}
+                  </ul>
+                </details>
+              ) : null}
+
+              {notApplicableCategories.length ? (
+                <details className="questionnaire-bucket">
+                  <summary>Not relevant to this project</summary>
+                  <ul>
+                    {notApplicableCategories.map((category) => (
                       <li key={category.id}>{category.label}</li>
                     ))}
                   </ul>

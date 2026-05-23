@@ -78,7 +78,12 @@ export type RequirementAnalysis = {
       id: string;
       label: string;
       status: "ready" | "in_progress" | "needed" | "needs_later_confirmation";
-      visibility: "main" | "already_understood" | "completed" | "suggested";
+      visibility:
+        | "main"
+        | "already_understood"
+        | "completed"
+        | "suggested"
+        | "not_applicable";
       progress: number;
       questions_total: number;
       questions_answered: number;
