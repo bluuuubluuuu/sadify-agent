@@ -22,6 +22,7 @@ from sadify_api.services.questionnaire_plan import (
     create_initial_plan,
     create_plan_from_evidence,
     defer_slot,
+    dismiss_slot,
     next_open_slot,
 )
 from sadify_api.services.slot_evidence import (
@@ -915,10 +916,15 @@ def _questionnaire_plan(
                 plan = defer_slot(plan, category_id, slot.id)
             continue
 
-    # Guard B: anti-loop. If the same (category, slot) has been answered
-    # 3+ times and still isn't covered, force-cover it. Stops the user
-    # from being trapped on the same question forever when Gemini's
-    # judgement keeps missing the slot.
+    # Guard B: strict anti-repetition. Per the "no repetition allowed"
+    # rule, the SECOND answer for the same (category, slot) advances the
+    # questionnaire — the user is never trapped on the same question.
+    #   - If real evidence exists (Guard A or Gemini said partial/strong),
+    #     dismiss the slot: status=covered, evidence_strength preserved
+    #     so the readiness score still reflects real evidence quality.
+    #   - If no evidence has accrued, defer the slot (confirm_later)
+    #     instead of fake-promoting to strong. The slot is out of the
+    #     question queue without inflating the percentage.
     answer_counts: dict[tuple[str, str], int] = {}
     for answer in answers:
         slot_id = answer.get("slot_id")
@@ -927,14 +933,18 @@ def _questionnaire_plan(
         key = (str(answer["category_id"]), str(slot_id))
         answer_counts[key] = answer_counts.get(key, 0) + 1
     for (category_id, slot_id), count in answer_counts.items():
-        if count < 3:
+        if count < 2:
             continue
         try:
             slot = plan.category(category_id).slot(slot_id)
         except KeyError:
             continue
-        if slot.status != "covered":
-            plan = cover_slot(plan, category_id, slot_id)
+        if slot.status == "covered":
+            continue
+        if slot.evidence_strength in ("partial", "strong"):
+            plan = dismiss_slot(plan, category_id, slot_id)
+        else:
+            plan = defer_slot(plan, category_id, slot_id)
 
     # Active category preference: stay where the user just answered if that
     # category still has open slots. Otherwise advance to the first open

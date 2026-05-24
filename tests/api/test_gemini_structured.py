@@ -2652,16 +2652,17 @@ def test_guard_a_long_substantive_answer_covers_slot_when_gemini_misses_it():
     )
 
 
-def test_guard_b_three_repeated_answers_force_cover_the_slot():
-    """Guard B: even with short generic answers (below Guard A's threshold),
-    the third repeat of the same (category, slot) force-covers the slot so
-    the user is never trapped in an infinite loop."""
+def test_guard_b_second_short_answer_removes_slot_from_question_queue():
+    """Guard B (tightened): the SECOND answer for the same slot ends the
+    repetition. If no real evidence has accrued, the slot is deferred
+    (confirm_later) — the user is never asked the same question a third
+    time. Active slot must advance past normal_flow."""
     p = _empty_evidence_payload(
         "workflow_steps",
         "normal_flow",
         "Which normal flow best matches the work?",
     )
-    model = FakeRequirementAnalysisModel([p, p, p, p])
+    model = FakeRequirementAnalysisModel([p, p, p])
     client = TestClient(
         create_app(
             analysis_model=model,
@@ -2678,7 +2679,8 @@ def test_guard_b_three_repeated_answers_force_cover_the_slot():
         "[slot: normal_flow] Which normal flow best matches the work?\n"
         f"Previous answer: {short_answer}\n\n"
     )
-    for repeat in range(1, 4):
+    # Two submissions on the same slot — the second one trips Guard B.
+    for repeat in range(1, 3):
         body = (
             "Small laundry shop wants order tracking.\n\n"
             + prior_block * repeat
@@ -2688,10 +2690,9 @@ def test_guard_b_three_repeated_answers_force_cover_the_slot():
         )
         assert resp.status_code == 200
     final = resp.json()["analysis"]["questionnaire"]
-    cats = {c["id"]: c for c in final["categories"]}
-    # After the 3rd repeat, normal_flow must be covered by the anti-loop
-    # backstop — questions_answered for workflow_steps reflects coverage.
-    assert cats["workflow_steps"]["questions_answered"] >= 1
+    # The active slot has advanced — user is no longer trapped on
+    # workflow_steps/normal_flow.
+    assert final["active_slot_id"] != "normal_flow"
 
 
 def test_saved_slot_evidence_persists_merged_carry_forward():

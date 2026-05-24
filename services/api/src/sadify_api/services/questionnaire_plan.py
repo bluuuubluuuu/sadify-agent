@@ -280,6 +280,21 @@ def defer_slot(
     return _update_slot(plan, category_id, slot_id, "confirm_later")
 
 
+def dismiss_slot(
+    plan: QuestionnairePlan,
+    category_id: str,
+    slot_id: str,
+) -> QuestionnairePlan:
+    """Mark a slot as covered WITHOUT changing its evidence strength.
+
+    Used by the anti-loop backstop: when the user has answered the same
+    slot 2+ times, remove it from the question queue, but don't fake
+    'strong' evidence — keep whatever Gemini/Guard A actually judged so
+    the readiness score still reflects real evidence quality.
+    """
+    return _update_slot(plan, category_id, slot_id, "covered")
+
+
 def reopen_slot(
     plan: QuestionnairePlan,
     category_id: str,
