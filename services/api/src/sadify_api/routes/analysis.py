@@ -1202,15 +1202,16 @@ def _questionnaire_categories_from_plan(plan) -> list[dict[str, object]]:
         required_slots = [slot for slot in category.slots if slot.required]
         applicable_required = [slot for slot in required_slots if slot.applicable]
         covered_slots = [slot for slot in required_slots if slot.status == "covered"]
-        # F3: per-category progress mirrors the global weighted score so the
+        # Per-category progress mirrors the global weighted score so the
         # headline % and the per-row % cannot contradict each other.
+        # Cycle 2A: fixed denominator (all required, not_applicable=1.0).
         progress = (
             round(
                 100
-                * sum(_slot_weight(slot) for slot in applicable_required)
-                / len(applicable_required)
+                * sum(_slot_weight(slot) for slot in required_slots)
+                / len(required_slots)
             )
-            if applicable_required
+            if required_slots
             else 100
         )
         categories.append(

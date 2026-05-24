@@ -308,19 +308,24 @@ def next_open_slot(plan: QuestionnairePlan) -> QuestionnairePlanSlotPointer | No
 
 def recalculate_readiness(plan: QuestionnairePlan) -> QuestionnairePlan:
     categories = [_refresh_category(category) for category in plan.categories]
-    applicable_required = [
+    # Cycle 2A: fixed denominator. Score over ALL canonical required slots —
+    # not_applicable counts as resolved (weight 1.0). This stops the
+    # percentage from dropping when a slot transitions from not_applicable
+    # to applicable+none, which previously grew the denominator without
+    # adding to the numerator.
+    required_slots = [
         slot
         for category in categories
         for slot in category.slots
-        if slot.required and slot.applicable
+        if slot.required
     ]
     score = (
         round(
             100
-            * sum(_slot_weight(slot) for slot in applicable_required)
-            / len(applicable_required)
+            * sum(_slot_weight(slot) for slot in required_slots)
+            / len(required_slots)
         )
-        if applicable_required
+        if required_slots
         else 100
     )
     active_slot = next_open_slot(
@@ -340,10 +345,13 @@ def recalculate_readiness(plan: QuestionnairePlan) -> QuestionnairePlan:
 
 
 def _slot_weight(slot: QuestionnairePlanSlot) -> float:
-    # Deferring a slot ("confirm_later") parks the question for later but does
-    # NOT earn readiness credit on its own — score still tracks the underlying
-    # evidence. The SAD-preview gate decides separately whether deferred gaps
-    # block the draft.
+    # Cycle 2A: not_applicable is a real resolution — the slot is off the
+    # table, so it counts as fully covered toward readiness. Otherwise
+    # weight by evidence strength. Deferring ("confirm_later") parks the
+    # question without earning credit on its own; the SAD-preview gate
+    # decides separately whether deferred gaps block the draft.
+    if not slot.applicable:
+        return 1.0
     if slot.evidence_strength == "strong":
         return 1.0
     if slot.evidence_strength == "partial":

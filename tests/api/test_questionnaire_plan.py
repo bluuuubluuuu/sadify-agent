@@ -296,3 +296,89 @@ def test_provenance_mix_keeps_source_and_qa_in_separate_buckets():
     )
     assert turn2.category("integrations").visibility == "already_understood"
     assert turn2.category("goal_scope").visibility == "completed"
+
+
+# --- Cycle 2A: fixed denominator + applicability stickiness --------------
+
+
+def test_not_applicable_slot_counts_as_resolved_in_score():
+    """A slot marked not_applicable contributes weight 1.0 — the denominator
+    is fixed at the canonical required count, so dismissing a slot can
+    only push the score up, never down."""
+    baseline = create_plan_from_evidence([])
+    with_na = create_plan_from_evidence([
+        _verdict("integrations", "external_systems", "none", "not_applicable"),
+    ])
+    assert with_na.overall_readiness.score > baseline.overall_readiness.score
+
+
+def test_score_never_drops_when_partial_verdict_replaces_not_applicable():
+    """Cycle 2A: if Gemini one turn marks a slot not_applicable, then the
+    next turn returns only a partial verdict, the previous not_applicable
+    sticks. Without this, the slot would re-enter the denominator at 0.5
+    weight (down from the 1.0 it had as not_applicable) and the percentage
+    would visibly drop."""
+    from sadify_api.services.slot_evidence import merge_evidence
+    prior = [_verdict("integrations", "external_systems", "none", "not_applicable")]
+    new = [_verdict("integrations", "external_systems", "partial", "applicable")]
+    merged = merge_evidence(prior=prior, new=new, edited_slots=set())
+    assert len(merged) == 1
+    # Sticky: prior not_applicable survives a non-strong new verdict.
+    assert merged[0].applicability == "not_applicable"
+
+
+def test_strong_evidence_can_revive_a_not_applicable_slot():
+    """The escape hatch: a strong (quote-validated) verdict CAN override a
+    prior not_applicable ruling, because strong evidence implies the slot
+    is real and answerable."""
+    from sadify_api.services.slot_evidence import merge_evidence
+    prior = [_verdict("integrations", "external_systems", "none", "not_applicable")]
+    new = [_verdict("integrations", "external_systems", "strong", "applicable")]
+    merged = merge_evidence(prior=prior, new=new, edited_slots=set())
+    assert merged[0].applicability == "applicable"
+    assert merged[0].strength == "strong"
+
+
+def test_applicable_slot_cannot_be_silently_dismissed():
+    """Cycle 2A: once a slot was applicable, it stays applicable — Gemini
+    drifting to not_applicable on a later turn must not silently remove
+    the slot from the user's question queue."""
+    from sadify_api.services.slot_evidence import merge_evidence
+    prior = [_verdict("goal_scope", "business_goal", "partial", "applicable")]
+    new = [_verdict("goal_scope", "business_goal", "none", "not_applicable")]
+    merged = merge_evidence(prior=prior, new=new, edited_slots=set())
+    assert merged[0].applicability == "applicable"
+
+
+def test_overall_readiness_score_is_monotonic_across_turns():
+    """End-to-end Cycle 2A: a sequence of plan rebuilds where Gemini's
+    verdicts mix applicable/not_applicable and weak/strong evidence must
+    produce a monotonically non-decreasing score."""
+    from sadify_api.services.slot_evidence import merge_evidence
+    turns = [
+        [_strong("goal_scope", "business_goal")],
+        [_verdict("integrations", "external_systems", "none", "not_applicable")],
+        [_verdict("integrations", "external_systems", "partial", "applicable")],
+        [_strong("users_roles", "primary_users")],
+        [_verdict("data_records", "main_records", "partial", "applicable")],
+    ]
+    prior_verdicts: list[SlotEvidence] = []
+    locked: set[str] = set()
+    provenance: dict[str, str] = {}
+    scores: list[int] = []
+    for new in turns:
+        merged = merge_evidence(prior=prior_verdicts, new=new, edited_slots=set())
+        plan = create_plan_from_evidence(
+            merged,
+            prior_locked_categories=locked,
+            prior_understood_via=provenance,
+        )
+        scores.append(plan.overall_readiness.score)
+        prior_verdicts = merged
+        locked = {c.id for c in plan.categories if c.locked_ready}
+        provenance = {
+            c.id: c.understood_via
+            for c in plan.categories
+            if c.understood_via
+        }
+    assert scores == sorted(scores), f"score regressed across turns: {scores}"

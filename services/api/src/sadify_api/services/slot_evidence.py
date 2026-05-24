@@ -73,11 +73,14 @@ def merge_evidence(
       changed an earlier answer; honour the fresh judgement);
     - else strength is strictly monotonic: take the stronger of prior/new
       (strong > partial > none). Strength never decreases without an edit.
-    - applicability is locked to the prior verdict UNLESS the winning strength
-      is partial or strong, in which case applicable is forced. Reasoning: a
-      slot cannot have real evidence AND be not_applicable. This blocks the
-      common drift where Gemini one turn marks a slot not_applicable and
-      silently kills accrued coverage.
+    - applicability is sticky-monotonic (Cycle 2A):
+        * once prior was 'not_applicable', stay not_applicable unless the new
+          verdict carries strong evidence (only strong can override an N/A
+          ruling — partial evidence is too weak to revive a dismissed slot);
+        * once prior was 'applicable', stay applicable (no Gemini-drift can
+          retroactively dismiss a slot the user is already engaging with).
+      This stops the percentage from dropping when Gemini flips a slot from
+      not_applicable to applicable+none and grows the denominator.
     - a slot present on only one side carries through unchanged.
 
     Effect: score moves monotonically up across turns (except on explicit edit
@@ -102,10 +105,14 @@ def merge_evidence(
         winner = (
             n if _STRENGTH_RANK[n.strength] >= _STRENGTH_RANK[p.strength] else p
         )
-        if winner.strength in ("partial", "strong"):
-            applicability = "applicable"  # evidence-bearing slot must be applicable
+        if winner.strength == "strong":
+            applicability = "applicable"  # strong evidence implies applicable
+        elif p.applicability == "applicable":
+            applicability = "applicable"  # sticky: never silently dismissed
+        elif p.applicability == "not_applicable":
+            applicability = "not_applicable"  # sticky: needs strong evidence to revive
         else:
-            applicability = p.applicability  # locked to first verdict
+            applicability = winner.applicability
         merged.append(winner.model_copy(update={"applicability": applicability}))
     return merged
 
