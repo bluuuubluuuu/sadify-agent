@@ -8,6 +8,7 @@ from sadify_api.schemas import (
     RequirementAnalysisApiResponse,
     RequirementAnalysisRequest,
     RequirementAnalysisResponse,
+    SlotEvidence,
 )
 from sadify_api.services.analysis_state import RequirementAnalysisRepository
 from sadify_api.services.gemini_structured import (
@@ -375,16 +376,63 @@ def _with_questionnaire_state(
     return RequirementAnalysisResponse.model_validate(payload)
 
 
+_PARTIAL_ANSWER_CHARS = 30
+_STRONG_ANSWER_CHARS = 60
+
+
 def _validated_evidence(
     analysis: RequirementAnalysisResponse,
     request: RequirementAnalysisRequest,
 ) -> tuple[list, list[str]]:
-    """Validate model slot evidence against the combined business material."""
+    """Validate model slot evidence against the combined business material.
+
+    Then apply Guard A: a slot the user has substantively answered is
+    promoted to at-least-'partial' (>=30 chars) or 'strong' (>=60 chars)
+    with the answer text as the quote. This stops the loop where Gemini's
+    judgement misses a slot the user clearly answered. Strong verdicts
+    from Gemini are never weakened — Guard A only raises the floor.
+    """
+    answers = _questionnaire_answers(request.requirement_text)
     material_parts = [_combined_requirement_context(request)]
-    for answer in _questionnaire_answers(request.requirement_text):
+    for answer in answers:
         material_parts.append(str(answer["answer"]))
     material = "\n".join(part for part in material_parts if part.strip())
-    return validate_slot_evidence(analysis.slot_evidence, material=material)
+    validated, diagnostics = validate_slot_evidence(
+        analysis.slot_evidence, material=material
+    )
+
+    # Guard A: upgrade slots with substantive user answers.
+    by_key = {(v.category_id, v.slot_id): v for v in validated}
+    for answer in answers:
+        slot_id = answer.get("slot_id")
+        if not slot_id:
+            continue
+        text = str(answer["answer"]).strip()
+        if len(text) < _PARTIAL_ANSWER_CHARS:
+            continue
+        promoted_strength = (
+            "strong" if len(text) >= _STRONG_ANSWER_CHARS else "partial"
+        )
+        key = (str(answer["category_id"]), str(slot_id))
+        existing = by_key.get(key)
+        if existing is not None and existing.strength == "strong":
+            continue
+        if (
+            existing is not None
+            and existing.strength == "partial"
+            and promoted_strength == "partial"
+        ):
+            continue
+        by_key[key] = SlotEvidence(
+            category_id=key[0],
+            slot_id=key[1],
+            applicability="applicable",
+            strength=promoted_strength,
+            evidence_quote=text,
+            rationale="User provided a substantive free-text answer.",
+        )
+
+    return list(by_key.values()), diagnostics
 
 
 def _edited_slot_keys(
@@ -442,6 +490,7 @@ def _with_non_repeating_question(
     )
     if not should_replace:
         return analysis
+
 
     replacement_question = fallback_question_for_slot(
         active_category_id,
@@ -859,6 +908,27 @@ def _questionnaire_plan(
             if slot is not None:
                 plan = defer_slot(plan, category_id, slot.id)
             continue
+
+    # Guard B: anti-loop. If the same (category, slot) has been answered
+    # 3+ times and still isn't covered, force-cover it. Stops the user
+    # from being trapped on the same question forever when Gemini's
+    # judgement keeps missing the slot.
+    answer_counts: dict[tuple[str, str], int] = {}
+    for answer in answers:
+        slot_id = answer.get("slot_id")
+        if not slot_id or answer.get("is_uncertain"):
+            continue
+        key = (str(answer["category_id"]), str(slot_id))
+        answer_counts[key] = answer_counts.get(key, 0) + 1
+    for (category_id, slot_id), count in answer_counts.items():
+        if count < 3:
+            continue
+        try:
+            slot = plan.category(category_id).slot(slot_id)
+        except KeyError:
+            continue
+        if slot.status != "covered":
+            plan = cover_slot(plan, category_id, slot_id)
 
     # Active category preference: stay where the user just answered if that
     # category still has open slots. Otherwise advance to the first open

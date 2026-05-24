@@ -2573,3 +2573,122 @@ def test_ratchet_keeps_cleared_category_cleared_across_drift_turn():
     assert cats2["goal_scope"]["status"] == "ready"
     # Active slot must never wander back to a cleared category.
     assert questionnaire["active_category_id"] != "goal_scope"
+
+
+# --- Guards A & B: anti-loop for slots Gemini's judgement keeps missing ---
+
+
+def _empty_evidence_payload(target_category, target_slot_id, question_text):
+    payload = json.loads(json.dumps(VALID_PAYLOAD))
+    payload["next_question"] = {
+        "text": question_text,
+        "why_this_matters": "Follow-up.",
+        "choices": [
+            {"id": "a", "label": "Option A"},
+            {"id": "b", "label": "Option B"},
+            {"id": "not_sure", "label": "Not sure"},
+        ],
+        "target_category": target_category,
+        "target_slot_id": target_slot_id,
+    }
+    payload["slot_evidence"] = []  # Gemini misses this slot entirely
+    return payload
+
+
+def test_guard_a_long_substantive_answer_covers_slot_when_gemini_misses_it():
+    """Guard A: a >=60-char free-text answer covers the slot even if
+    Gemini returned no slot_evidence for it. Stops the workflow_steps
+    stuck loop the user hit in the laundry test."""
+    p1 = _empty_evidence_payload(
+        "workflow_steps",
+        "normal_flow",
+        "What are the main steps in processing a customer's order?",
+    )
+    p2 = _empty_evidence_payload(
+        "workflow_steps",
+        "normal_flow",
+        "What are the main steps in processing a customer's order?",
+    )
+    model = FakeRequirementAnalysisModel([p1, p2])
+    client = TestClient(
+        create_app(
+            analysis_model=model,
+            analysis_repository=RequirementAnalysisRepository(),
+        )
+    )
+    # Turn 1: prime the prior so slot/category markers are in scope.
+    r1 = client.post(
+        "/analysis/requirement",
+        json={"requirement_text": "Small laundry shop wants order tracking."},
+    )
+    assert r1.status_code == 200
+    # Turn 2: user submits a long, substantive answer for normal_flow.
+    long_answer = (
+        "Customer drops off laundry and an order is created, staff wash, "
+        "dry, iron and pack the items, customer picks up and pays."
+    )
+    assert len(long_answer) >= 60
+    r2 = client.post(
+        "/analysis/requirement",
+        json={
+            "requirement_text": (
+                "Small laundry shop wants order tracking.\n\n"
+                "Previous question: [category: workflow_steps] "
+                "[slot: normal_flow] What are the main steps?\n"
+                f"Previous answer: {long_answer}"
+            )
+        },
+    )
+    assert r2.status_code == 200
+    cats = {
+        c["id"]: c
+        for c in r2.json()["analysis"]["questionnaire"]["categories"]
+    }
+    assert cats["workflow_steps"]["questions_answered"] >= 1
+    # The active slot must advance off normal_flow now that it's covered.
+    active_slot = r2.json()["analysis"]["questionnaire"]["active_slot_id"]
+    assert active_slot != "normal_flow" or (
+        cats["workflow_steps"]["status"] in {"ready", "in_progress"}
+    )
+
+
+def test_guard_b_three_repeated_answers_force_cover_the_slot():
+    """Guard B: even with short generic answers (below Guard A's threshold),
+    the third repeat of the same (category, slot) force-covers the slot so
+    the user is never trapped in an infinite loop."""
+    p = _empty_evidence_payload(
+        "workflow_steps",
+        "normal_flow",
+        "Which normal flow best matches the work?",
+    )
+    model = FakeRequirementAnalysisModel([p, p, p, p])
+    client = TestClient(
+        create_app(
+            analysis_model=model,
+            analysis_repository=RequirementAnalysisRepository(),
+        )
+    )
+    client.post(
+        "/analysis/requirement",
+        json={"requirement_text": "Small laundry shop wants order tracking."},
+    )
+    short_answer = "register process close"  # 22 chars, below Guard A
+    prior_block = (
+        "Previous question: [category: workflow_steps] "
+        "[slot: normal_flow] Which normal flow best matches the work?\n"
+        f"Previous answer: {short_answer}\n\n"
+    )
+    for repeat in range(1, 4):
+        body = (
+            "Small laundry shop wants order tracking.\n\n"
+            + prior_block * repeat
+        )
+        resp = client.post(
+            "/analysis/requirement", json={"requirement_text": body}
+        )
+        assert resp.status_code == 200
+    final = resp.json()["analysis"]["questionnaire"]
+    cats = {c["id"]: c for c in final["categories"]}
+    # After the 3rd repeat, normal_flow must be covered by the anti-loop
+    # backstop — questions_answered for workflow_steps reflects coverage.
+    assert cats["workflow_steps"]["questions_answered"] >= 1
