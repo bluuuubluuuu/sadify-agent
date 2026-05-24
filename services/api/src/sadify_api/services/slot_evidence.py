@@ -57,6 +57,55 @@ def evidence_map(
     }
 
 
+_STRENGTH_RANK = {"none": 0, "partial": 1, "strong": 2}
+
+
+def merge_evidence(
+    *,
+    prior: list[SlotEvidence],
+    new: list[SlotEvidence],
+    edited_slots: set[tuple[str, str]],
+) -> list[SlotEvidence]:
+    """Monotonic carry-forward merge of prior + new slot-evidence verdicts.
+
+    Per (category, slot):
+    - if the slot is in `edited_slots` (the user changed an earlier answer for
+      this slot) -> use the new verdict only;
+    - else take the stronger of prior/new (strong > partial > none);
+    - `not_applicable` is sticky: once either side marks the slot
+      not_applicable, the merged verdict stays not_applicable;
+    - a slot present on only one side carries through unchanged.
+
+    The goal is to stop the per-turn flicker SADify was hitting where a slot
+    judged `strong` last turn could regress to `partial` or `none` this turn
+    just because the model output varies. Once evidence is established, it
+    sticks until the user explicitly edits that answer.
+    """
+    prior_map = {} if not prior else evidence_map(prior)
+    new_map = {} if not new else evidence_map(new)
+    keys = set(prior_map) | set(new_map)
+    merged: list[SlotEvidence] = []
+    for key in keys:
+        n = new_map.get(key)
+        p = None if key in edited_slots else prior_map.get(key)
+        if p is None and n is None:
+            continue
+        if p is None:
+            merged.append(n)
+            continue
+        if n is None:
+            merged.append(p)
+            continue
+        winner = n if _STRENGTH_RANK[n.strength] >= _STRENGTH_RANK[p.strength] else p
+        applicability = (
+            "not_applicable"
+            if "not_applicable" in (p.applicability, n.applicability)
+            else "applicable"
+        )
+        merged.append(winner.model_copy(update={"applicability": applicability}))
+    return merged
+
+
 def derive_confidence(
     verdicts: list[SlotEvidence],
     *,

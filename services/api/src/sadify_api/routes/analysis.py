@@ -25,6 +25,7 @@ from sadify_api.services.questionnaire_plan import (
 )
 from sadify_api.services.slot_evidence import (
     derive_confidence,
+    merge_evidence,
     validate_slot_evidence,
 )
 from sadify_api.services.questionnaire_slots import (
@@ -73,6 +74,8 @@ def create_analysis_router(
         request: RequirementAnalysisRequest,
     ) -> RequirementAnalysisApiResponse:
         locked_target = _locked_target_for_request(request)
+        prior_record = repository.latest_for_guest_draft(request.guest_draft_id)
+        prior_analysis = prior_record.analysis if prior_record is not None else None
         for repair in (False, True):
             raw_json = ""
             try:
@@ -96,6 +99,7 @@ def create_analysis_router(
                     analysis,
                     request,
                     fallback_used=False,
+                    prior_analysis=prior_analysis,
                 )
             except (ValidationError, QuestionnaireDriftError) as exc:
                 # Diagnostic: capture WHY Gemini output was rejected so we can
@@ -134,6 +138,7 @@ def create_analysis_router(
         fallback_analysis = _fallback_requirement_analysis(
             request,
             locked_target=locked_target,
+            prior_analysis=prior_analysis,
         )
         record = repository.save_analysis(
             requirement_text=request.requirement_text,
@@ -234,9 +239,20 @@ def _with_questionnaire_state(
     request: RequirementAnalysisRequest,
     *,
     fallback_used: bool,
+    prior_analysis: RequirementAnalysisResponse | None = None,
 ) -> RequirementAnalysisResponse:
     answers = _questionnaire_answers(request.requirement_text)
-    verdicts, evidence_diagnostics = _validated_evidence(analysis, request)
+    new_verdicts, evidence_diagnostics = _validated_evidence(analysis, request)
+    # Carry-forward merge: stops per-turn flicker, prevents readiness from
+    # regressing when Gemini's verdict for a slot varies between calls or
+    # when the fallback path returns no verdicts at all.
+    prior_verdicts = (
+        list(prior_analysis.slot_evidence) if prior_analysis is not None else []
+    )
+    edited_slots = _edited_slot_keys(prior_analysis, answers)
+    verdicts = merge_evidence(
+        prior=prior_verdicts, new=new_verdicts, edited_slots=edited_slots
+    )
     plan = _questionnaire_plan(verdicts, answers)
     derived_confidence = derive_confidence(
         verdicts, downgrade_count=len(evidence_diagnostics)
@@ -299,6 +315,31 @@ def _validated_evidence(
         material_parts.append(str(answer["answer"]))
     material = "\n".join(part for part in material_parts if part.strip())
     return validate_slot_evidence(analysis.slot_evidence, material=material)
+
+
+def _edited_slot_keys(
+    prior_analysis: RequirementAnalysisResponse | None,
+    current_answers: list[dict[str, object]],
+) -> set[tuple[str, str]]:
+    """Slots whose latest answer text changed vs the previous saved analysis.
+
+    Only slots present in BOTH prior and current count as edits — a brand-new
+    answer for a slot the user has not addressed before is not an edit, and
+    its prior evidence (likely 'none') merges naturally with the new verdict.
+    """
+    if prior_analysis is None or prior_analysis.questionnaire is None:
+        return set()
+    prior_latest: dict[tuple[str, str], str] = {}
+    for answer in prior_analysis.questionnaire.answers:
+        key = (answer.category_id, answer.slot_id or "")
+        prior_latest[key] = answer.answer
+    edited: set[tuple[str, str]] = set()
+    for answer in current_answers:
+        key = (str(answer["category_id"]), str(answer.get("slot_id") or ""))
+        prior_text = prior_latest.get(key)
+        if prior_text is not None and prior_text != str(answer["answer"]):
+            edited.add(key)
+    return edited
 
 
 def _with_non_repeating_question(
@@ -394,6 +435,7 @@ def _fallback_requirement_analysis(
     request: RequirementAnalysisRequest,
     *,
     locked_target=None,
+    prior_analysis: RequirementAnalysisResponse | None = None,
 ) -> RequirementAnalysisResponse:
     latest_question = _latest_previous_question(request.requirement_text)
     latest_answer = _latest_previous_answer(request.requirement_text)
@@ -404,7 +446,9 @@ def _fallback_requirement_analysis(
         topic = latest_topic
         question = _fallback_uncertainty_question(topic)
     elif locked_target is not None:
-        return _fallback_requirement_analysis_for_slot(request, locked_target)
+        return _fallback_requirement_analysis_for_slot(
+            request, locked_target, prior_analysis=prior_analysis
+        )
     elif _is_specific_fallback_question(latest_question) and latest_topic["id"] != "fallback":
         if answered_counts.get(latest_topic["id"], 0) >= FALLBACK_QUESTIONS_NEEDED:
             topic = _next_incomplete_topic(answered_counts, latest_topic["id"])
@@ -454,12 +498,16 @@ def _fallback_requirement_analysis(
         assumptions=assumptions,
         source_references=source_references,
     )
-    return _with_questionnaire_state(analysis, request, fallback_used=True)
+    return _with_questionnaire_state(
+        analysis, request, fallback_used=True, prior_analysis=prior_analysis
+    )
 
 
 def _fallback_requirement_analysis_for_slot(
     request: RequirementAnalysisRequest,
     locked_target: QuestionnairePlanSlotPointer,
+    *,
+    prior_analysis: RequirementAnalysisResponse | None = None,
 ) -> RequirementAnalysisResponse:
     source_references = list(request.source_references) or ["Business Request"]
     analysis = RequirementAnalysisResponse.model_validate(
@@ -493,7 +541,9 @@ def _fallback_requirement_analysis_for_slot(
             "proposed_extra_categories": [],
         }
     )
-    return _with_questionnaire_state(analysis, request, fallback_used=True)
+    return _with_questionnaire_state(
+        analysis, request, fallback_used=True, prior_analysis=prior_analysis
+    )
 
 
 def _validate_question_semantics(analysis: RequirementAnalysisResponse) -> None:

@@ -33,3 +33,22 @@ class RequirementAnalysisRepository:
 
     def get_analysis(self, analysis_id: str) -> RequirementAnalysisRecord | None:
         return self._analyses.get(analysis_id)
+
+    def latest_for_guest_draft(
+        self, guest_draft_id: str | None
+    ) -> RequirementAnalysisRecord | None:
+        """Return the most recently saved analysis for this guest draft.
+
+        Used by the analysis route to carry forward prior slot_evidence across
+        turns so readiness does not regress between calls.
+        """
+        if not guest_draft_id:
+            return None
+        records = [
+            record
+            for record in self._analyses.values()
+            if record.guest_draft_id == guest_draft_id
+        ]
+        if not records:
+            return None
+        return max(records, key=lambda record: record.created_at)

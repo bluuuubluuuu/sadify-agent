@@ -2259,3 +2259,156 @@ def test_analysis_api_surfaces_safe_model_failure_detail_in_dev():
     assert response.json() == {
         "detail": "Gemini analysis failed: RuntimeError: diagnostic failure without secret"
     }
+
+
+def test_analysis_carries_prior_evidence_when_new_turn_returns_no_verdicts():
+    """Turn 1 establishes a strong slot; turn 2 returns empty slot_evidence
+    (simulating Gemini flicker or fallback). Carry-forward must preserve the
+    prior strong evidence so readiness does not regress to zero."""
+    requirement_text = "A small bakery needs a system to track orders."
+
+    turn1 = json.loads(json.dumps(VALID_PAYLOAD))
+    turn1["slot_evidence"] = [
+        {
+            "category_id": "goal_scope",
+            "slot_id": "business_goal",
+            "applicability": "applicable",
+            "strength": "strong",
+            "evidence_quote": "needs a system to track orders",
+            "rationale": "explicit goal in the request",
+        }
+    ]
+
+    turn2 = json.loads(json.dumps(VALID_PAYLOAD))
+    turn2["slot_evidence"] = []  # model "forgot" or fallback path
+
+    repository = RequirementAnalysisRepository()
+    model = FakeRequirementAnalysisModel([turn1, turn2])
+    client = TestClient(
+        create_app(
+            analysis_model=model,
+            analysis_repository=repository,
+        )
+    )
+
+    r1 = client.post(
+        "/analysis/requirement",
+        json={
+            "requirement_text": requirement_text,
+            "guest_draft_id": "g-bakery",
+        },
+    )
+    assert r1.status_code == 200
+    score1 = r1.json()["analysis"]["questionnaire"]["draft_readiness"]["score"]
+    assert score1 > 0
+
+    r2 = client.post(
+        "/analysis/requirement",
+        json={
+            "requirement_text": (
+                f"{requirement_text}\n\n"
+                "Previous question: [category: goal_scope][slot: business_goal] "
+                "What is the business goal?\n"
+                "Previous answer: Track customer cake orders end to end"
+            ),
+            "guest_draft_id": "g-bakery",
+        },
+    )
+    assert r2.status_code == 200
+    score2 = r2.json()["analysis"]["questionnaire"]["draft_readiness"]["score"]
+    # Carry-forward: turn 2's empty verdicts must not wipe turn 1's coverage.
+    assert score2 >= score1
+
+
+def test_analysis_edit_to_prior_answer_resets_only_that_slot():
+    """Editing a slot's answer should let the new verdict override the prior
+    strong one for THAT slot, while other strong slots stay strong."""
+    text = "A small bakery needs a system to track orders."
+
+    turn1 = json.loads(json.dumps(VALID_PAYLOAD))
+    turn1["slot_evidence"] = [
+        {
+            "category_id": "goal_scope",
+            "slot_id": "business_goal",
+            "applicability": "applicable",
+            "strength": "strong",
+            "evidence_quote": "needs a system to track orders",
+            "rationale": "explicit goal",
+        },
+        {
+            "category_id": "goal_scope",
+            "slot_id": "in_scope_outcome",
+            "applicability": "applicable",
+            "strength": "strong",
+            "evidence_quote": "track orders",
+            "rationale": "in-scope outcome",
+        },
+        {
+            "category_id": "users_roles",
+            "slot_id": "primary_users",
+            "applicability": "applicable",
+            "strength": "strong",
+            "evidence_quote": "needs a system to track orders",
+            "rationale": "answer establishes users",
+        },
+    ]
+
+    # Turn 2 re-judges the EDITED slot as none (with no quote). With edit
+    # reset, that slot must drop. goal_scope must stay strong via carry-forward.
+    turn2 = json.loads(json.dumps(VALID_PAYLOAD))
+    turn2["slot_evidence"] = [
+        {
+            "category_id": "users_roles",
+            "slot_id": "primary_users",
+            "applicability": "applicable",
+            "strength": "none",
+            "evidence_quote": "",
+            "rationale": "user edited and the new answer is vague",
+        },
+    ]
+
+    repository = RequirementAnalysisRepository()
+    model = FakeRequirementAnalysisModel([turn1, turn2])
+    client = TestClient(
+        create_app(
+            analysis_model=model,
+            analysis_repository=repository,
+        )
+    )
+
+    r1 = client.post(
+        "/analysis/requirement",
+        json={
+            "requirement_text": (
+                f"{text}\n\n"
+                "Previous question: [category: users_roles][slot: primary_users] "
+                "Who uses it?\n"
+                "Previous answer: Counter staff and owner"
+            ),
+            "guest_draft_id": "g-edit",
+        },
+    )
+    assert r1.status_code == 200
+
+    # Turn 2: same slot, DIFFERENT answer text → counts as an edit.
+    r2 = client.post(
+        "/analysis/requirement",
+        json={
+            "requirement_text": (
+                f"{text}\n\n"
+                "Previous question: [category: users_roles][slot: primary_users] "
+                "Who uses it?\n"
+                "Previous answer: Unsure"
+            ),
+            "guest_draft_id": "g-edit",
+        },
+    )
+    assert r2.status_code == 200
+    categories = {
+        c["id"]: c
+        for c in r2.json()["analysis"]["questionnaire"]["categories"]
+    }
+    # goal_scope kept its prior strong verdict (not edited)
+    assert categories["goal_scope"]["weakest_slot_strength"] in ("partial", "strong")
+    # users_roles dropped because the edited slot's prior was reset
+    assert categories["users_roles"]["weakest_slot_strength"] == "none"

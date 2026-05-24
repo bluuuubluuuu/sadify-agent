@@ -135,3 +135,77 @@ def test_evidence_map_keys_by_category_and_slot():
         [_verdict("goal_scope", "business_goal", "strong", "q")]
     )
     assert mapping[("goal_scope", "business_goal")].strength == "strong"
+
+
+# --- merge_evidence: monotonic carry-forward across turns -----------------
+
+from sadify_api.services.slot_evidence import merge_evidence
+
+
+def test_merge_keeps_prior_strong_when_new_is_weaker():
+    prior = [_verdict("goal_scope", "business_goal", "strong", "real quote")]
+    new = [_verdict("goal_scope", "business_goal", "partial", "q")]
+    merged = merge_evidence(prior=prior, new=new, edited_slots=set())
+    assert merged[0].strength == "strong"
+
+
+def test_merge_upgrades_when_new_is_stronger():
+    prior = [_verdict("goal_scope", "business_goal", "partial", "q")]
+    new = [_verdict("goal_scope", "business_goal", "strong", "q")]
+    merged = merge_evidence(prior=prior, new=new, edited_slots=set())
+    assert merged[0].strength == "strong"
+
+
+def test_merge_keeps_prior_when_new_is_missing():
+    """Fallback turns return no slot_evidence; prior must survive."""
+    prior = [_verdict("goal_scope", "business_goal", "strong", "q")]
+    merged = merge_evidence(prior=prior, new=[], edited_slots=set())
+    assert merged[0].strength == "strong"
+
+
+def test_merge_takes_new_when_prior_is_missing():
+    new = [_verdict("users_roles", "primary_users", "strong", "q")]
+    merged = merge_evidence(prior=[], new=new, edited_slots=set())
+    assert merged[0].strength == "strong"
+
+
+def test_merge_not_applicable_is_sticky():
+    """Once Gemini marks a slot not_applicable, it stays not_applicable."""
+    prior = [
+        _verdict("integrations", "external_systems", "none", "", "not_applicable")
+    ]
+    new = [
+        _verdict("integrations", "external_systems", "strong", "q", "applicable")
+    ]
+    merged = merge_evidence(prior=prior, new=new, edited_slots=set())
+    assert merged[0].applicability == "not_applicable"
+
+
+def test_merge_resets_edited_slot_to_new_verdict_only():
+    """Editing a slot's answer lets the new verdict override carry-forward."""
+    prior = [_verdict("users_roles", "primary_users", "strong", "old quote")]
+    new = [_verdict("users_roles", "primary_users", "partial", "q")]
+    merged = merge_evidence(
+        prior=prior,
+        new=new,
+        edited_slots={("users_roles", "primary_users")},
+    )
+    assert merged[0].strength == "partial"
+
+
+def test_merge_edit_on_one_slot_does_not_wipe_other_strong_slots():
+    prior = [
+        _verdict("goal_scope", "business_goal", "strong", "q"),
+        _verdict("users_roles", "primary_users", "strong", "old quote"),
+    ]
+    new = [_verdict("users_roles", "primary_users", "partial", "q")]
+    merged_map = {
+        (v.category_id, v.slot_id): v
+        for v in merge_evidence(
+            prior=prior,
+            new=new,
+            edited_slots={("users_roles", "primary_users")},
+        )
+    }
+    assert merged_map[("goal_scope", "business_goal")].strength == "strong"
+    assert merged_map[("users_roles", "primary_users")].strength == "partial"
