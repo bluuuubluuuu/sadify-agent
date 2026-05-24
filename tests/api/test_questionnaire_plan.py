@@ -204,3 +204,95 @@ def test_next_open_slot_skips_not_applicable_slots():
     pointer = next_open_slot(plan)
     assert pointer is not None
     assert (pointer.category_id, pointer.slot_id) != ("goal_scope", "business_goal")
+
+
+# --- Provenance / bucket label (Already understood vs Completed) ---------
+
+
+def test_initial_plan_marks_ready_categories_as_source():
+    """create_initial_plan runs before any Q&A, so any Ready category came
+    from the original requirement / uploaded files and must land in the
+    'Already understood' bucket."""
+    plan = create_initial_plan(
+        initial_facts={"workflow_steps": {"normal_flow", "handoffs"}}
+    )
+    workflow = plan.category("workflow_steps")
+    assert workflow.understood_via == "source"
+    assert workflow.visibility == "already_understood"
+
+
+def test_evidence_plan_defaults_new_ready_to_qa():
+    """In the live flow after Q&A starts, newly Ready categories come from
+    the user's answers, so they land in the 'Completed areas' bucket."""
+    plan = create_plan_from_evidence(
+        [_strong("goal_scope", "business_goal"),
+         _strong("goal_scope", "in_scope_outcome")]
+    )
+    goal = plan.category("goal_scope")
+    assert goal.understood_via == "qa"
+    assert goal.visibility == "completed"
+
+
+def test_evidence_plan_honors_explicit_source_provenance():
+    """First analysis turn (no prior, no answers yet) tags newly Ready
+    categories as 'source' so PDF-derived areas land in Already understood."""
+    plan = create_plan_from_evidence(
+        [_strong("goal_scope", "business_goal"),
+         _strong("goal_scope", "in_scope_outcome")],
+        default_new_provenance="source",
+    )
+    goal = plan.category("goal_scope")
+    assert goal.understood_via == "source"
+    assert goal.visibility == "already_understood"
+
+
+def test_provenance_is_preserved_across_carry_forward():
+    """Once a category is tagged 'source', a later turn's rebuild with
+    carry-forward must NOT silently re-stamp it 'qa' / 'completed'.
+    This is the bug the user reported in the laundry video."""
+    before = create_plan_from_evidence(
+        [_strong("integrations", "external_systems")],
+        default_new_provenance="source",
+    )
+    assert before.category("integrations").understood_via == "source"
+    assert before.category("integrations").visibility == "already_understood"
+
+    after = create_plan_from_evidence(
+        [],  # adversarial: this turn has no evidence for integrations
+        prior_locked_categories={
+            c.id for c in before.categories if c.locked_ready
+        },
+        prior_understood_via={
+            c.id: c.understood_via
+            for c in before.categories
+            if c.understood_via
+        },
+    )
+    assert after.category("integrations").locked_ready is True
+    assert after.category("integrations").understood_via == "source"
+    assert after.category("integrations").visibility == "already_understood"
+
+
+def test_provenance_mix_keeps_source_and_qa_in_separate_buckets():
+    """A turn where one category was source-cleared (turn 1) and another
+    is newly QA-cleared (this turn) must land them in different buckets."""
+    turn1 = create_plan_from_evidence(
+        [_strong("integrations", "external_systems")],
+        default_new_provenance="source",
+    )
+    turn2 = create_plan_from_evidence(
+        [_strong("integrations", "external_systems"),
+         _strong("goal_scope", "business_goal"),
+         _strong("goal_scope", "in_scope_outcome")],
+        prior_locked_categories={
+            c.id for c in turn1.categories if c.locked_ready
+        },
+        prior_understood_via={
+            c.id: c.understood_via
+            for c in turn1.categories
+            if c.understood_via
+        },
+        default_new_provenance="qa",
+    )
+    assert turn2.category("integrations").visibility == "already_understood"
+    assert turn2.category("goal_scope").visibility == "completed"

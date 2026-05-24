@@ -310,8 +310,19 @@ def _with_questionnaire_state(
     )
     # Ratchet: any category cleared in an earlier turn stays cleared.
     locked_categories = _prior_locked_categories(prior_analysis)
+    prior_provenance = _prior_understood_via(prior_analysis)
+    # Default for categories newly Ready this turn: "source" only on the
+    # very first analysis (no answers yet, no prior turn); after that the
+    # user has been answering, so newly Ready = "qa".
+    default_new_provenance = (
+        "source" if prior_analysis is None and not answers else "qa"
+    )
     plan = _questionnaire_plan(
-        verdicts, answers, prior_locked_categories=locked_categories
+        verdicts,
+        answers,
+        prior_locked_categories=locked_categories,
+        prior_understood_via=prior_provenance,
+        default_new_provenance=default_new_provenance,
     )
     derived_confidence = derive_confidence(
         verdicts, downgrade_count=len(evidence_diagnostics)
@@ -832,9 +843,14 @@ def _questionnaire_plan(
     answers: list[dict[str, object]],
     *,
     prior_locked_categories: set[str] | None = None,
+    prior_understood_via: dict[str, str] | None = None,
+    default_new_provenance: str = "qa",
 ):
     plan = create_plan_from_evidence(
-        verdicts, prior_locked_categories=prior_locked_categories
+        verdicts,
+        prior_locked_categories=prior_locked_categories,
+        prior_understood_via=prior_understood_via,
+        default_new_provenance=default_new_provenance,
     )
     for answer in _unique_questionnaire_answers(answers):
         if answer.get("is_uncertain"):
@@ -871,6 +887,27 @@ def _prior_locked_categories(
     }
 
 
+def _prior_understood_via(
+    prior_analysis: RequirementAnalysisResponse | None,
+) -> dict[str, str]:
+    """Frozen bucket provenance from the previous saved turn.
+
+    Reads it back off the prior visibility on the wire:
+      already_understood → "source", completed → "qa". This lets the next
+      turn keep each cleared category in the same bucket the user saw
+      before, instead of letting carry-forward stamp everything "qa".
+    """
+    if prior_analysis is None or prior_analysis.questionnaire is None:
+        return {}
+    provenance: dict[str, str] = {}
+    for category in prior_analysis.questionnaire.categories:
+        if category.visibility == "already_understood":
+            provenance[category.id] = "source"
+        elif category.visibility == "completed":
+            provenance[category.id] = "qa"
+    return provenance
+
+
 def _locked_target_for_request(
     request: RequirementAnalysisRequest,
     *,
@@ -899,8 +936,15 @@ def _locked_target_for_request(
         prior=prior_verdicts, new=[], edited_slots=edited_slots
     )
     locked = _prior_locked_categories(prior_analysis)
+    prior_provenance = _prior_understood_via(prior_analysis)
+    default_new_provenance = (
+        "source" if prior_analysis is None and not answers else "qa"
+    )
     plan = create_plan_from_evidence(
-        verdicts, prior_locked_categories=locked
+        verdicts,
+        prior_locked_categories=locked,
+        prior_understood_via=prior_provenance,
+        default_new_provenance=default_new_provenance,
     )
 
     # Layer 2: answer-marker coverage. The user's submitted answers haven't

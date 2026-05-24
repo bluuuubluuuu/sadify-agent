@@ -151,13 +151,15 @@ def create_initial_plan(
             )
             for slot_id, label, required in blueprint["slots"]
         ]
+        # No Q&A has happened yet, so any category that is Ready here came
+        # from the original requirement text / uploaded files.
         categories.append(
             _build_category(
                 category_id=category_id,
                 label=str(blueprint["label"]),
                 display_order=display_order,
                 slots=slots,
-                initial_visibility=True,
+                understood_via="source",
             )
         )
 
@@ -179,6 +181,8 @@ def create_plan_from_evidence(
     *,
     plan_id: str = "QPLAN-001",
     prior_locked_categories: set[str] | None = None,
+    prior_understood_via: Mapping[str, str] | None = None,
+    default_new_provenance: str = "qa",
 ) -> QuestionnairePlan:
     """Build a questionnaire plan from validated slot evidence verdicts.
 
@@ -188,10 +192,18 @@ def create_plan_from_evidence(
 
     `prior_locked_categories` carries forward the one-way ratchet across
     turns: any category that was ever Ready stays Ready, with its slots
-    forced covered and visibility locked to completed. This is what stops
-    category reversal — once cleared, a category cannot be re-opened.
+    forced covered and visibility locked. This is what stops category
+    reversal — once cleared, a category cannot be re-opened.
+
+    `prior_understood_via` carries forward the frozen "source" vs "qa"
+    provenance so the Already-understood vs Completed-areas bucket label
+    never flips between turns. New categories that become Ready in this
+    turn are tagged with `default_new_provenance` ("qa" in the live flow
+    because the user has just answered something; "source" only on the
+    very first analysis turn before any answers exist).
     """
     locked = set(prior_locked_categories or set())
+    provenance_in = dict(prior_understood_via or {})
     by_slot = {
         (verdict.category_id, verdict.slot_id): verdict for verdict in verdicts
     }
@@ -223,13 +235,17 @@ def create_plan_from_evidence(
                     applicable=applicable,
                 )
             )
+        will_be_ready = is_locked or _category_status(slots) == "ready"
+        understood_via: str | None = provenance_in.get(category_id)
+        if understood_via is None and will_be_ready:
+            understood_via = default_new_provenance
         categories.append(
             _build_category(
                 category_id=category_id,
                 label=str(blueprint["label"]),
                 display_order=display_order,
                 slots=slots,
-                initial_visibility=True,
+                understood_via=understood_via,
                 locked_ready=is_locked,
             )
         )
@@ -365,26 +381,35 @@ def _update_slot(
     return recalculate_readiness(plan.model_copy(update={"categories": categories}))
 
 
+def _derive_visibility(
+    slots: list[QuestionnairePlanSlot],
+    status: str,
+    locked_ready: bool,
+    understood_via: str | None,
+) -> str:
+    required_slots = [slot for slot in slots if slot.required]
+    if required_slots and all(not slot.applicable for slot in required_slots):
+        return "not_applicable"
+    if locked_ready or status == "ready":
+        # "source" = learned from the original requirement / uploads;
+        # anything else (including unset) reads as Q&A-cleared.
+        return "already_understood" if understood_via == "source" else "completed"
+    return "main"
+
+
 def _build_category(
     *,
     category_id: str,
     label: str,
     display_order: int,
     slots: list[QuestionnairePlanSlot],
-    initial_visibility: bool,
     locked_ready: bool = False,
+    understood_via: str | None = None,
 ) -> QuestionnairePlanCategory:
     status = _category_status(slots)
-    required_slots = [slot for slot in slots if slot.required]
-    visibility = "main"
-    if required_slots and all(not slot.applicable for slot in required_slots):
-        visibility = "not_applicable"
-    elif initial_visibility and status == "ready":
-        visibility = "already_understood"
-    # Ratchet: if this category arrives already locked, treat it as completed.
     if locked_ready:
         status = "ready"
-        visibility = "completed"
+    visibility = _derive_visibility(slots, status, locked_ready, understood_via)
     return QuestionnairePlanCategory(
         id=category_id,
         label=label,
@@ -393,37 +418,33 @@ def _build_category(
         status=status,
         slots=slots,
         locked_ready=locked_ready,
+        understood_via=understood_via,
     )
 
 
 def _refresh_category(category: QuestionnairePlanCategory) -> QuestionnairePlanCategory:
-    # Ratchet: a category that was ever Ready stays Ready forever. Force the
-    # status/visibility back even if a defensive caller built it wrong.
+    # Ratchet: a category that was ever Ready stays Ready forever.
     if category.locked_ready:
+        visibility = _derive_visibility(
+            category.slots, "ready", True, category.understood_via
+        )
         return category.model_copy(
-            update={"status": "ready", "visibility": "completed"}
+            update={"status": "ready", "visibility": visibility}
         )
 
     status = _category_status(category.slots)
-    required_slots = [slot for slot in category.slots if slot.required]
-    if required_slots and all(not slot.applicable for slot in required_slots):
-        visibility = "not_applicable"
-    elif category.visibility == "not_applicable":
-        visibility = "main"
-    elif category.visibility == "already_understood" and status != "ready":
-        visibility = "main"
-    elif category.visibility == "main" and status == "ready":
-        visibility = "completed"
-    elif category.visibility == "completed" and status != "ready":
-        visibility = "main"
-    else:
-        visibility = category.visibility
-
     # First time this category reaches Ready in this session → engage the
     # ratchet. From here on it cannot regress.
-    locked_ready = category.locked_ready or status == "ready"
+    locked_ready = status == "ready"
+    visibility = _derive_visibility(
+        category.slots, status, locked_ready, category.understood_via
+    )
     return category.model_copy(
-        update={"status": status, "visibility": visibility, "locked_ready": locked_ready}
+        update={
+            "status": status,
+            "visibility": visibility,
+            "locked_ready": locked_ready,
+        }
     )
 
 

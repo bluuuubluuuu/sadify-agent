@@ -150,6 +150,11 @@ class QuestionnairePlanCategory(ApiModel):
     # active-slot picking can never wander back into it. Prevents the
     # category-reversal symptom even when later model verdicts drift.
     locked_ready: bool = False
+    # Frozen provenance for the bucket label: "source" = became Ready from
+    # the original requirement text / uploaded files (before any Q&A);
+    # "qa" = became Ready from a user answer in a later turn. Set once the
+    # category first reaches Ready and preserved across carry-forward.
+    understood_via: Literal["source", "qa"] | None = None
 
     def slot(self, slot_id: str) -> QuestionnairePlanSlot:
         for slot in self.slots:
