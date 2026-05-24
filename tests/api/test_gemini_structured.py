@@ -2493,3 +2493,83 @@ def test_signed_in_flow_carries_prior_evidence_without_guest_draft_id():
     # The drift verdict (not_applicable) must NOT kill the previously strong slot.
     categories = {c["id"]: c for c in questionnaire["categories"]}
     assert categories["goal_scope"]["weakest_slot_strength"] == "strong"
+
+
+def test_ratchet_keeps_cleared_category_cleared_across_drift_turn():
+    """Once a category is cleared (Ready), a later drift turn that judges
+    its slots weakly must NOT re-open it. This is the user-facing
+    'no revert, no pop-up' guarantee."""
+    base = "A bakery needs to track cake orders end to end."
+    turn1 = json.loads(json.dumps(VALID_PAYLOAD))
+    turn1["slot_evidence"] = [
+        {
+            "category_id": "goal_scope",
+            "slot_id": "business_goal",
+            "applicability": "applicable",
+            "strength": "strong",
+            "evidence_quote": "track cake orders",
+            "rationale": "explicit",
+        },
+        {
+            "category_id": "goal_scope",
+            "slot_id": "in_scope_outcome",
+            "applicability": "applicable",
+            "strength": "strong",
+            "evidence_quote": "track cake orders",
+            "rationale": "in-scope",
+        },
+    ]
+    # Turn 2 adversarially marks BOTH goal_scope slots as none, plus drift
+    # to not_applicable on one of them.
+    turn2 = json.loads(json.dumps(VALID_PAYLOAD))
+    turn2["slot_evidence"] = [
+        {
+            "category_id": "goal_scope",
+            "slot_id": "business_goal",
+            "applicability": "not_applicable",
+            "strength": "none",
+            "evidence_quote": "",
+            "rationale": "drift",
+        },
+        {
+            "category_id": "goal_scope",
+            "slot_id": "in_scope_outcome",
+            "applicability": "applicable",
+            "strength": "none",
+            "evidence_quote": "",
+            "rationale": "drift",
+        },
+    ]
+
+    repository = RequirementAnalysisRepository()
+    model = FakeRequirementAnalysisModel([turn1, turn2])
+    client = TestClient(
+        create_app(
+            analysis_model=model,
+            analysis_repository=repository,
+        )
+    )
+
+    r1 = client.post("/analysis/requirement", json={"requirement_text": base})
+    assert r1.status_code == 200
+    cats1 = {c["id"]: c for c in r1.json()["analysis"]["questionnaire"]["categories"]}
+    assert cats1["goal_scope"]["status"] == "ready"
+
+    r2 = client.post(
+        "/analysis/requirement",
+        json={
+            "requirement_text": (
+                f"{base}\n\n"
+                "Previous question: [category: users_roles][slot: primary_users] "
+                "Who uses it?\n"
+                "Previous answer: Counter staff and bakers"
+            )
+        },
+    )
+    assert r2.status_code == 200
+    questionnaire = r2.json()["analysis"]["questionnaire"]
+    cats2 = {c["id"]: c for c in questionnaire["categories"]}
+    # Ratchet invariant: goal_scope stays Ready despite the drift verdict.
+    assert cats2["goal_scope"]["status"] == "ready"
+    # Active slot must never wander back to a cleared category.
+    assert questionnaire["active_category_id"] != "goal_scope"

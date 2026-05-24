@@ -63,17 +63,17 @@ def create_sad_router(
                 )
             except ValidationError as exc:
                 logger.warning(
-                    "sad_preview_validation_failed repair=%s err=%s raw_len=%d raw_head=%r raw_tail=%r",
+                    "sadify_preview validation_failed repair=%s err=%s raw_len=%d",
                     repair,
-                    f"{type(exc).__name__}: {str(exc)[:500]}",
+                    f"{type(exc).__name__}:{str(exc)[:120]}",
                     len(raw_json),
-                    raw_json[:600],
-                    raw_json[-400:] if len(raw_json) > 1000 else "",
                 )
                 continue
             except Exception as exc:
                 logger.exception(
-                    "sad_preview_call_failed repair=%s raw_len=%d", repair, len(raw_json)
+                    "sadify_preview call_failed repair=%s raw_len=%d",
+                    repair,
+                    len(raw_json),
                 )
                 raise HTTPException(
                     status_code=502,

@@ -73,20 +73,13 @@ def create_analysis_router(
     def analyze_requirement(
         request: RequirementAnalysisRequest,
     ) -> RequirementAnalysisApiResponse:
-        locked_target = _locked_target_for_request(request)
         prior_record = repository.latest_for_request(request)
         prior_analysis = prior_record.analysis if prior_record is not None else None
-        # Diagnostic: was carry-forward able to find a prior turn for this
-        # session? If prior_found=False on every turn the user takes, the
-        # carry-forward never engages and readiness rebuilds from scratch.
-        # Logged at WARNING level so uvicorn's default filter shows it next
-        # to the existing analysis_validation_failed line.
-        logger.warning(
-            "analysis_request guest_draft_id=%r prior_found=%s prior_id=%s",
-            request.guest_draft_id,
-            prior_record is not None,
-            prior_record.analysis_id if prior_record is not None else None,
+        locked_target = _locked_target_for_request(
+            request, prior_analysis=prior_analysis
         )
+        locked_categories = _prior_locked_categories(prior_analysis)
+        validation_errors: list[str] = []
         for repair in (False, True):
             raw_json = ""
             try:
@@ -113,20 +106,13 @@ def create_analysis_router(
                     prior_analysis=prior_analysis,
                 )
             except (ValidationError, QuestionnaireDriftError) as exc:
-                # Diagnostic: capture WHY Gemini output was rejected so we can
-                # tell schema mismatches apart from token truncation in logs.
-                logger.warning(
-                    "analysis_validation_failed repair=%s err=%s raw_len=%d raw_head=%r raw_tail=%r",
-                    repair,
-                    f"{type(exc).__name__}: {_safe_exception_message(exc)}",
-                    len(raw_json),
-                    raw_json[:600],
-                    raw_json[-400:] if len(raw_json) > 1000 else "",
+                validation_errors.append(
+                    f"repair={repair}:{type(exc).__name__}:{_safe_exception_message(exc)[:120]}"
                 )
                 continue
             except Exception as exc:
                 logger.exception(
-                    "analysis_call_failed repair=%s raw_len=%d",
+                    "sadify_turn analysis_call_failed repair=%s raw_len=%d",
                     repair,
                     len(raw_json),
                 )
@@ -139,6 +125,13 @@ def create_analysis_router(
                 requirement_text=request.requirement_text,
                 guest_draft_id=request.guest_draft_id,
                 analysis=analysis,
+            )
+            _log_turn(
+                record=record,
+                source="gemini",
+                prior=prior_record,
+                locked_categories=locked_categories,
+                validation_errors=validation_errors,
             )
             return RequirementAnalysisApiResponse(
                 analysis_id=record.analysis_id,
@@ -156,6 +149,13 @@ def create_analysis_router(
             guest_draft_id=request.guest_draft_id,
             analysis=fallback_analysis,
         )
+        _log_turn(
+            record=record,
+            source="fallback",
+            prior=prior_record,
+            locked_categories=locked_categories,
+            validation_errors=validation_errors,
+        )
         return RequirementAnalysisApiResponse(
             analysis_id=record.analysis_id,
             saved=True,
@@ -163,6 +163,50 @@ def create_analysis_router(
         )
 
     return router
+
+
+def _log_turn(
+    *,
+    record,
+    source: str,
+    prior,
+    locked_categories: set[str],
+    validation_errors: list[str],
+) -> None:
+    """One structured line per /analysis/requirement turn.
+
+    Designed for tailing during browser smoke. Fields:
+      id              this turn's analysis id
+      source          'gemini' (validated) or 'fallback' (local template)
+      prior           prior turn id or None
+      active          active category/slot, or 'none' when draft-ready
+      score           draft readiness percent
+      locked          comma-separated categories already cleared (ratchet)
+      errors          repair_flag:type:short_message per validation retry (if any)
+    """
+    questionnaire = record.analysis.questionnaire
+    if questionnaire is None:
+        active = "none"
+        score = 0
+    else:
+        active = (
+            f"{questionnaire.active_category_id}/"
+            f"{questionnaire.active_slot_id or '-'}"
+        )
+        score = questionnaire.draft_readiness.score
+    locked_str = ",".join(sorted(locked_categories)) or "-"
+    errors_str = "|".join(validation_errors) if validation_errors else "-"
+    prior_id = prior.analysis_id if prior is not None else None
+    logger.warning(
+        "sadify_turn id=%s source=%s prior=%s active=%s score=%d locked=%s errors=%s",
+        record.analysis_id,
+        source,
+        prior_id,
+        active,
+        score,
+        locked_str,
+        errors_str,
+    )
 
 
 def _safe_exception_message(exc: Exception) -> str:
@@ -264,7 +308,11 @@ def _with_questionnaire_state(
     verdicts = merge_evidence(
         prior=prior_verdicts, new=new_verdicts, edited_slots=edited_slots
     )
-    plan = _questionnaire_plan(verdicts, answers)
+    # Ratchet: any category cleared in an earlier turn stays cleared.
+    locked_categories = _prior_locked_categories(prior_analysis)
+    plan = _questionnaire_plan(
+        verdicts, answers, prior_locked_categories=locked_categories
+    )
     derived_confidence = derive_confidence(
         verdicts, downgrade_count=len(evidence_diagnostics)
     )
@@ -373,15 +421,13 @@ def _with_non_repeating_question(
     target_category_id = _canonical_category_id(
         analysis.next_question.target_category
     )
+    # Replace ONLY when Gemini's slot doesn't match the active slot. The
+    # fuzzy 70%-token-overlap check was removed: it was replacing valid
+    # Gemini follow-up questions with generic templates whenever phrasing
+    # rhymed with a prior question.
     should_replace = (
         target_category_id != active_category_id
         or analysis.next_question.target_slot_id != active_slot.id
-        or _question_already_answered(
-            analysis.next_question.text,
-            active_category_id,
-            active_slot.id,
-            answers,
-        )
     )
     if not should_replace:
         return analysis
@@ -784,8 +830,12 @@ def _question_tokens(question: str) -> set[str]:
 def _questionnaire_plan(
     verdicts: list,
     answers: list[dict[str, object]],
+    *,
+    prior_locked_categories: set[str] | None = None,
 ):
-    plan = create_plan_from_evidence(verdicts)
+    plan = create_plan_from_evidence(
+        verdicts, prior_locked_categories=prior_locked_categories
+    )
     for answer in _unique_questionnaire_answers(answers):
         if answer.get("is_uncertain"):
             category_id = str(answer["category_id"])
@@ -794,6 +844,9 @@ def _questionnaire_plan(
                 plan = defer_slot(plan, category_id, slot.id)
             continue
 
+    # Active category preference: stay where the user just answered if that
+    # category still has open slots. Otherwise advance to the first open
+    # category in plan order. Locked-ready categories are skipped either way.
     active_category_id = _active_category_from_answers(plan, answers)
     if active_category_id is None:
         open_slot = next_open_slot(plan)
@@ -801,12 +854,61 @@ def _questionnaire_plan(
     return plan.model_copy(update={"active_category_id": active_category_id})
 
 
-def _locked_target_for_request(request: RequirementAnalysisRequest):
-    answers = _unique_questionnaire_answers(
-        _questionnaire_answers(request.requirement_text)
+def _prior_locked_categories(
+    prior_analysis: RequirementAnalysisResponse | None,
+) -> set[str]:
+    """Categories already cleared (Ready) in the previous saved turn.
+
+    The ratchet carries these forward so a cleared category never re-opens
+    no matter what the new turn's evidence says.
+    """
+    if prior_analysis is None or prior_analysis.questionnaire is None:
+        return set()
+    return {
+        category.id
+        for category in prior_analysis.questionnaire.categories
+        if category.status == "ready"
+    }
+
+
+def _locked_target_for_request(
+    request: RequirementAnalysisRequest,
+    *,
+    prior_analysis: RequirementAnalysisResponse | None = None,
+):
+    """Compute the slot the prompt should lock to BEFORE calling Gemini.
+
+    Combines two signals so the lock matches what the post-hoc plan will
+    compute (and the user sees Gemini's actual domain-aware question
+    instead of a generic fallback):
+
+    1. Carry-forward `slot_evidence` from the previous saved turn, merged
+       under the monotonic rule (locked categories ratchet through).
+    2. Answer-marker coverage from THIS request's Previous Q/A history,
+       since Gemini hasn't yet judged those answers into slot_evidence
+       for this turn.
+    """
+    prior_verdicts = (
+        list(prior_analysis.slot_evidence)
+        if prior_analysis is not None
+        else []
     )
-    plan = create_plan_from_evidence([])
-    for answer in answers:
+    answers = _questionnaire_answers(request.requirement_text)
+    edited_slots = _edited_slot_keys(prior_analysis, answers)
+    verdicts = merge_evidence(
+        prior=prior_verdicts, new=[], edited_slots=edited_slots
+    )
+    locked = _prior_locked_categories(prior_analysis)
+    plan = create_plan_from_evidence(
+        verdicts, prior_locked_categories=locked
+    )
+
+    # Layer 2: answer-marker coverage. The user's submitted answers haven't
+    # been judged into slot_evidence for THIS turn yet, so apply them
+    # directly. Without this, the locked target ignores fresh answers and
+    # the post-hoc rewrite kicks in.
+    unique_answers = _unique_questionnaire_answers(answers)
+    for answer in unique_answers:
         category_id = str(answer["category_id"])
         slot = _slot_for_answer(plan, answer)
         if slot is None:
@@ -816,7 +918,11 @@ def _locked_target_for_request(request: RequirementAnalysisRequest):
         else:
             plan = cover_slot(plan, category_id, slot.id)
 
-    active_category_id = _active_category_from_answers(plan, answers)
+    # Strict-order rule: stay in the category of the user's most recent
+    # answer (if still not ready) instead of jumping back to an earlier
+    # unanswered category. Combined with the ratchet, this gives the
+    # "no revert, no pop-up" behavior the user asked for.
+    active_category_id = _active_category_from_answers(plan, unique_answers)
     if active_category_id is not None:
         slot = _next_open_slot_in_category(plan, active_category_id)
         if slot is not None:
@@ -824,6 +930,7 @@ def _locked_target_for_request(request: RequirementAnalysisRequest):
                 category_id=active_category_id,
                 slot_id=slot.id,
             )
+
     open_slot = next_open_slot(plan)
     if open_slot is not None:
         return open_slot

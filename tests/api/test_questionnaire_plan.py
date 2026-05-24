@@ -93,6 +93,70 @@ def test_partial_evidence_score_is_half():
     assert plan.overall_readiness.score == round(100 * 0.5 / 19)
 
 
+# --- One-way category ratchet --------------------------------------------
+
+
+def _strong(category_id, slot_id):
+    return SlotEvidence(
+        category_id=category_id,
+        slot_id=slot_id,
+        applicability="applicable",
+        strength="strong",
+        evidence_quote="q",
+    )
+
+
+def test_category_becomes_locked_ready_when_all_required_slots_covered():
+    """Once a category reaches Ready, it should carry a locked_ready flag."""
+    plan = create_plan_from_evidence([
+        _strong("goal_scope", "business_goal"),
+        _strong("goal_scope", "in_scope_outcome"),
+    ])
+    assert plan.category("goal_scope").status == "ready"
+    assert plan.category("goal_scope").locked_ready is True
+
+
+def test_locked_ready_category_stays_ready_when_evidence_disappears():
+    """Adversarial: even if a later turn's evidence is missing or downgraded,
+    a once-Ready category must stay Ready and stay out of the active queue."""
+    before = create_plan_from_evidence([
+        _strong("goal_scope", "business_goal"),
+        _strong("goal_scope", "in_scope_outcome"),
+    ])
+    # Carry locked_ready forward into a "next turn" plan rebuild that would
+    # otherwise show goal_scope at none for both slots.
+    after = create_plan_from_evidence(
+        [],
+        prior_locked_categories=
+            {c.id for c in before.categories if c.locked_ready},
+    )
+    assert after.category("goal_scope").status == "ready"
+    assert after.category("goal_scope").locked_ready is True
+
+
+def test_next_open_slot_skips_locked_ready_categories():
+    """Active-slot picker must never return a slot inside a locked category."""
+    plan = create_plan_from_evidence(
+        [_strong("goal_scope", "business_goal"),
+         _strong("goal_scope", "in_scope_outcome")]
+    )
+    pointer = next_open_slot(plan)
+    assert pointer is not None
+    assert pointer.category_id != "goal_scope"
+
+
+def test_category_does_not_lock_when_only_partially_ready():
+    """A category with one partial slot is in_progress, not Ready, and must
+    NOT be locked."""
+    plan = create_plan_from_evidence([
+        _strong("goal_scope", "business_goal"),
+        SlotEvidence(category_id="goal_scope", slot_id="in_scope_outcome",
+                     strength="partial", evidence_quote="q"),
+    ])
+    assert plan.category("goal_scope").status != "ready"
+    assert plan.category("goal_scope").locked_ready is False
+
+
 def _verdict(category_id, slot_id, strength, applicability="applicable"):
     return SlotEvidence(
         category_id=category_id,

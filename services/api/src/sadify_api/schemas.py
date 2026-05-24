@@ -145,6 +145,11 @@ class QuestionnairePlanCategory(ApiModel):
     ] = "main"
     status: Literal["needs_answer", "in_progress", "ready", "confirm_later"]
     slots: list[QuestionnairePlanSlot] = Field(min_length=1)
+    # One-way ratchet. Once a category reaches Ready it is locked: future
+    # plan rebuilds keep it Ready/completed, next_open_slot skips it, and
+    # active-slot picking can never wander back into it. Prevents the
+    # category-reversal symptom even when later model verdicts drift.
+    locked_ready: bool = False
 
     def slot(self, slot_id: str) -> QuestionnairePlanSlot:
         for slot in self.slots:

@@ -178,19 +178,27 @@ def create_plan_from_evidence(
     verdicts: list[SlotEvidence],
     *,
     plan_id: str = "QPLAN-001",
+    prior_locked_categories: set[str] | None = None,
 ) -> QuestionnairePlan:
     """Build a questionnaire plan from validated slot evidence verdicts.
 
-    Each verdict sets a slot's evidence_strength and applicable flag. A slot is
-    covered for Q&A flow only when its strength is strong; partial slots stay
-    open so they still get a question.
+    Each verdict sets a slot's evidence_strength and applicable flag. A slot
+    is covered for Q&A flow only when its strength is strong; partial slots
+    stay open so they still get a question.
+
+    `prior_locked_categories` carries forward the one-way ratchet across
+    turns: any category that was ever Ready stays Ready, with its slots
+    forced covered and visibility locked to completed. This is what stops
+    category reversal — once cleared, a category cannot be re-opened.
     """
+    locked = set(prior_locked_categories or set())
     by_slot = {
         (verdict.category_id, verdict.slot_id): verdict for verdict in verdicts
     }
     categories: list[QuestionnairePlanCategory] = []
     for display_order, blueprint in enumerate(_CATEGORY_BLUEPRINTS, start=1):
         category_id = str(blueprint["id"])
+        is_locked = category_id in locked
         slots: list[QuestionnairePlanSlot] = []
         for slot_id, label, required in blueprint["slots"]:
             verdict = by_slot.get((category_id, slot_id))
@@ -198,12 +206,19 @@ def create_plan_from_evidence(
             applicable = (
                 verdict.applicability == "applicable" if verdict else True
             )
+            if is_locked and required and applicable:
+                # Ratchet: a locked-ready category's required slots are
+                # forced covered + strong regardless of this turn's verdict.
+                strength = "strong"
+                status = "covered"
+            else:
+                status = "covered" if strength == "strong" else "open"
             slots.append(
                 QuestionnairePlanSlot(
                     id=slot_id,
                     label=label,
                     required=required,
-                    status="covered" if strength == "strong" else "open",
+                    status=status,
                     evidence_strength=strength,
                     applicable=applicable,
                 )
@@ -215,6 +230,7 @@ def create_plan_from_evidence(
                 display_order=display_order,
                 slots=slots,
                 initial_visibility=True,
+                locked_ready=is_locked,
             )
         )
     return recalculate_readiness(
@@ -260,6 +276,9 @@ def reopen_slot(
 
 def next_open_slot(plan: QuestionnairePlan) -> QuestionnairePlanSlotPointer | None:
     for category in sorted(plan.categories, key=lambda item: item.display_order):
+        # Ratchet: locked-ready categories are out of the active queue forever.
+        if category.locked_ready:
+            continue
         if category.visibility in {"already_understood", "completed", "suggested"}:
             continue
         for slot in category.slots:
@@ -353,6 +372,7 @@ def _build_category(
     display_order: int,
     slots: list[QuestionnairePlanSlot],
     initial_visibility: bool,
+    locked_ready: bool = False,
 ) -> QuestionnairePlanCategory:
     status = _category_status(slots)
     required_slots = [slot for slot in slots if slot.required]
@@ -361,6 +381,10 @@ def _build_category(
         visibility = "not_applicable"
     elif initial_visibility and status == "ready":
         visibility = "already_understood"
+    # Ratchet: if this category arrives already locked, treat it as completed.
+    if locked_ready:
+        status = "ready"
+        visibility = "completed"
     return QuestionnairePlanCategory(
         id=category_id,
         label=label,
@@ -368,10 +392,18 @@ def _build_category(
         visibility=visibility,
         status=status,
         slots=slots,
+        locked_ready=locked_ready,
     )
 
 
 def _refresh_category(category: QuestionnairePlanCategory) -> QuestionnairePlanCategory:
+    # Ratchet: a category that was ever Ready stays Ready forever. Force the
+    # status/visibility back even if a defensive caller built it wrong.
+    if category.locked_ready:
+        return category.model_copy(
+            update={"status": "ready", "visibility": "completed"}
+        )
+
     status = _category_status(category.slots)
     required_slots = [slot for slot in category.slots if slot.required]
     if required_slots and all(not slot.applicable for slot in required_slots):
@@ -386,7 +418,13 @@ def _refresh_category(category: QuestionnairePlanCategory) -> QuestionnairePlanC
         visibility = "main"
     else:
         visibility = category.visibility
-    return category.model_copy(update={"status": status, "visibility": visibility})
+
+    # First time this category reaches Ready in this session → engage the
+    # ratchet. From here on it cannot regress.
+    locked_ready = category.locked_ready or status == "ready"
+    return category.model_copy(
+        update={"status": status, "visibility": visibility, "locked_ready": locked_ready}
+    )
 
 
 def _category_status(slots: list[QuestionnairePlanSlot]) -> str:
