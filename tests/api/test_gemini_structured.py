@@ -2412,3 +2412,84 @@ def test_analysis_edit_to_prior_answer_resets_only_that_slot():
     assert categories["goal_scope"]["weakest_slot_strength"] in ("partial", "strong")
     # users_roles dropped because the edited slot's prior was reset
     assert categories["users_roles"]["weakest_slot_strength"] == "none"
+
+
+def test_signed_in_flow_carries_prior_evidence_without_guest_draft_id():
+    """Signed-in flow sends no guest_draft_id. The repository must still
+    match the prior turn by base requirement text, so readiness does not
+    regress between turns."""
+    base = "A small bakery needs a system to track custom cake orders."
+
+    turn1 = json.loads(json.dumps(VALID_PAYLOAD))
+    turn1["slot_evidence"] = [
+        {
+            "category_id": "goal_scope",
+            "slot_id": "business_goal",
+            "applicability": "applicable",
+            "strength": "strong",
+            "evidence_quote": "track custom cake orders",
+            "rationale": "explicit goal",
+        },
+        {
+            "category_id": "goal_scope",
+            "slot_id": "in_scope_outcome",
+            "applicability": "applicable",
+            "strength": "strong",
+            "evidence_quote": "track custom cake orders",
+            "rationale": "in-scope outcome",
+        },
+    ]
+
+    # Turn 2 drifts: marks the previously-strong goal slot as not_applicable
+    # AND returns empty for the others. Carry-forward + rigid applicability
+    # rule must keep turn 1's strong verdicts intact.
+    turn2 = json.loads(json.dumps(VALID_PAYLOAD))
+    turn2["slot_evidence"] = [
+        {
+            "category_id": "goal_scope",
+            "slot_id": "business_goal",
+            "applicability": "not_applicable",
+            "strength": "none",
+            "evidence_quote": "",
+            "rationale": "drift",
+        },
+    ]
+
+    repository = RequirementAnalysisRepository()
+    model = FakeRequirementAnalysisModel([turn1, turn2])
+    client = TestClient(
+        create_app(
+            analysis_model=model,
+            analysis_repository=repository,
+        )
+    )
+
+    # Turn 1 — signed-in: NO guest_draft_id.
+    r1 = client.post("/analysis/requirement", json={"requirement_text": base})
+    assert r1.status_code == 200
+    score1 = r1.json()["analysis"]["questionnaire"]["draft_readiness"]["score"]
+    assert score1 > 0
+
+    # Turn 2 — same session: base text matches, no guest_draft_id.
+    r2 = client.post(
+        "/analysis/requirement",
+        json={
+            "requirement_text": (
+                f"{base}\n\n"
+                "Previous question: [category: goal_scope][slot: in_scope_outcome] "
+                "What outcomes?\n"
+                "Previous answer: Faster order processing"
+            )
+        },
+    )
+    assert r2.status_code == 200
+    questionnaire = r2.json()["analysis"]["questionnaire"]
+    score2 = questionnaire["draft_readiness"]["score"]
+    # Carry-forward via base-text lookup must keep turn 1's strong evidence
+    # intact even though the new turn would have wiped it.
+    assert score2 >= score1, (
+        f"signed-in carry-forward regressed: turn1={score1} turn2={score2}"
+    )
+    # The drift verdict (not_applicable) must NOT kill the previously strong slot.
+    categories = {c["id"]: c for c in questionnaire["categories"]}
+    assert categories["goal_scope"]["weakest_slot_strength"] == "strong"

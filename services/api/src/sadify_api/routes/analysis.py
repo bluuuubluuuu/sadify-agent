@@ -74,8 +74,16 @@ def create_analysis_router(
         request: RequirementAnalysisRequest,
     ) -> RequirementAnalysisApiResponse:
         locked_target = _locked_target_for_request(request)
-        prior_record = repository.latest_for_guest_draft(request.guest_draft_id)
+        prior_record = repository.latest_for_request(request)
         prior_analysis = prior_record.analysis if prior_record is not None else None
+        # Diagnostic: was carry-forward able to find a prior turn for this
+        # session? If prior_found=False on every turn the user takes, the
+        # carry-forward never engages and readiness rebuilds from scratch.
+        logger.info(
+            "analysis_request guest_draft_id=%r prior_found=%s",
+            request.guest_draft_id,
+            prior_record is not None,
+        )
         for repair in (False, True):
             raw_json = ""
             try:

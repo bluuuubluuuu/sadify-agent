@@ -2,8 +2,18 @@ from datetime import UTC, datetime
 
 from sadify_api.schemas import (
     RequirementAnalysisRecord,
+    RequirementAnalysisRequest,
     RequirementAnalysisResponse,
 )
+
+
+def _base_requirement_text(requirement_text: str) -> str:
+    """The immutable prompt from before any 'Previous question:' append.
+
+    All turns inside one session share this prefix, so it is a stable session
+    key when no guest_draft_id is available (signed-in flow).
+    """
+    return requirement_text.split("Previous question:", 1)[0].strip()
 
 
 class RequirementAnalysisRepository:
@@ -37,11 +47,7 @@ class RequirementAnalysisRepository:
     def latest_for_guest_draft(
         self, guest_draft_id: str | None
     ) -> RequirementAnalysisRecord | None:
-        """Return the most recently saved analysis for this guest draft.
-
-        Used by the analysis route to carry forward prior slot_evidence across
-        turns so readiness does not regress between calls.
-        """
+        """Return the most recently saved analysis for this guest draft."""
         if not guest_draft_id:
             return None
         records = [
@@ -52,3 +58,31 @@ class RequirementAnalysisRepository:
         if not records:
             return None
         return max(records, key=lambda record: record.created_at)
+
+    def latest_for_request(
+        self, request: RequirementAnalysisRequest
+    ) -> RequirementAnalysisRecord | None:
+        """Find the most recent analysis for this session.
+
+        Priority:
+          1. explicit guest_draft_id (guest flow);
+          2. matching base requirement text (signed-in flow, where the request
+             carries no draft id but the base prompt is stable across turns).
+
+        Used by /analysis/requirement to carry slot_evidence forward across
+        turns, so readiness does not regress on model flicker or fallback.
+        """
+        by_draft = self.latest_for_guest_draft(request.guest_draft_id)
+        if by_draft is not None:
+            return by_draft
+        base = _base_requirement_text(request.requirement_text)
+        if not base:
+            return None
+        matches = [
+            record
+            for record in self._analyses.values()
+            if _base_requirement_text(record.requirement_text) == base
+        ]
+        if not matches:
+            return None
+        return max(matches, key=lambda record: record.created_at)

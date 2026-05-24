@@ -66,20 +66,23 @@ def merge_evidence(
     new: list[SlotEvidence],
     edited_slots: set[tuple[str, str]],
 ) -> list[SlotEvidence]:
-    """Monotonic carry-forward merge of prior + new slot-evidence verdicts.
+    """Rigid monotonic carry-forward merge.
 
     Per (category, slot):
-    - if the slot is in `edited_slots` (the user changed an earlier answer for
-      this slot) -> use the new verdict only;
-    - else take the stronger of prior/new (strong > partial > none);
-    - `not_applicable` is sticky: once either side marks the slot
-      not_applicable, the merged verdict stays not_applicable;
+    - if the slot is in `edited_slots` -> use the new verdict only (the user
+      changed an earlier answer; honour the fresh judgement);
+    - else strength is strictly monotonic: take the stronger of prior/new
+      (strong > partial > none). Strength never decreases without an edit.
+    - applicability is locked to the prior verdict UNLESS the winning strength
+      is partial or strong, in which case applicable is forced. Reasoning: a
+      slot cannot have real evidence AND be not_applicable. This blocks the
+      common drift where Gemini one turn marks a slot not_applicable and
+      silently kills accrued coverage.
     - a slot present on only one side carries through unchanged.
 
-    The goal is to stop the per-turn flicker SADify was hitting where a slot
-    judged `strong` last turn could regress to `partial` or `none` this turn
-    just because the model output varies. Once evidence is established, it
-    sticks until the user explicitly edits that answer.
+    Effect: score moves monotonically up across turns (except on explicit edit
+    of an already-strong slot, which intentionally re-evaluates that slot).
+    No silent regressions from per-turn model drift.
     """
     prior_map = {} if not prior else evidence_map(prior)
     new_map = {} if not new else evidence_map(new)
@@ -96,12 +99,13 @@ def merge_evidence(
         if n is None:
             merged.append(p)
             continue
-        winner = n if _STRENGTH_RANK[n.strength] >= _STRENGTH_RANK[p.strength] else p
-        applicability = (
-            "not_applicable"
-            if "not_applicable" in (p.applicability, n.applicability)
-            else "applicable"
+        winner = (
+            n if _STRENGTH_RANK[n.strength] >= _STRENGTH_RANK[p.strength] else p
         )
+        if winner.strength in ("partial", "strong"):
+            applicability = "applicable"  # evidence-bearing slot must be applicable
+        else:
+            applicability = p.applicability  # locked to first verdict
         merged.append(winner.model_copy(update={"applicability": applicability}))
     return merged
 

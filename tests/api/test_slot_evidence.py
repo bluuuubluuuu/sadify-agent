@@ -169,8 +169,21 @@ def test_merge_takes_new_when_prior_is_missing():
     assert merged[0].strength == "strong"
 
 
-def test_merge_not_applicable_is_sticky():
-    """Once Gemini marks a slot not_applicable, it stays not_applicable."""
+def test_merge_not_applicable_sticks_when_no_evidence_arrives():
+    """NA stays NA when no later verdict brings real evidence."""
+    prior = [
+        _verdict("integrations", "external_systems", "none", "", "not_applicable")
+    ]
+    new = [
+        _verdict("integrations", "external_systems", "none", "", "applicable")
+    ]
+    merged = merge_evidence(prior=prior, new=new, edited_slots=set())
+    assert merged[0].applicability == "not_applicable"
+
+
+def test_merge_not_applicable_unlocks_when_strong_evidence_arrives():
+    """If Gemini later finds strong evidence, NA must yield — can't have
+    real evidence for an inapplicable slot."""
     prior = [
         _verdict("integrations", "external_systems", "none", "", "not_applicable")
     ]
@@ -178,7 +191,31 @@ def test_merge_not_applicable_is_sticky():
         _verdict("integrations", "external_systems", "strong", "q", "applicable")
     ]
     merged = merge_evidence(prior=prior, new=new, edited_slots=set())
-    assert merged[0].applicability == "not_applicable"
+    assert merged[0].applicability == "applicable"
+    assert merged[0].strength == "strong"
+
+
+def test_merge_strong_evidence_blocks_later_not_applicable_drift():
+    """RIGID invariant: a slot with strong evidence cannot be killed by a
+    later not_applicable verdict — score can never silently regress."""
+    prior = [_verdict("data_records", "main_records", "strong", "q", "applicable")]
+    new = [
+        _verdict("data_records", "main_records", "none", "", "not_applicable")
+    ]
+    merged = merge_evidence(prior=prior, new=new, edited_slots=set())
+    assert merged[0].applicability == "applicable"
+    assert merged[0].strength == "strong"
+
+
+def test_merge_applicable_none_blocks_later_not_applicable_drift():
+    """Applicability is locked to first verdict for unproven slots: an
+    applicable+none slot does not silently flip to NA on a drift turn."""
+    prior = [_verdict("data_records", "main_records", "none", "", "applicable")]
+    new = [
+        _verdict("data_records", "main_records", "none", "", "not_applicable")
+    ]
+    merged = merge_evidence(prior=prior, new=new, edited_slots=set())
+    assert merged[0].applicability == "applicable"
 
 
 def test_merge_resets_edited_slot_to_new_verdict_only():
