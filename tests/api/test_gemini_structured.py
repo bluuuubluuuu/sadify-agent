@@ -2692,3 +2692,67 @@ def test_guard_b_three_repeated_answers_force_cover_the_slot():
     # After the 3rd repeat, normal_flow must be covered by the anti-loop
     # backstop — questions_answered for workflow_steps reflects coverage.
     assert cats["workflow_steps"]["questions_answered"] >= 1
+
+
+def test_saved_slot_evidence_persists_merged_carry_forward():
+    """Cycle 2A: saved slot_evidence must be the MERGED carry-forward
+    list, not just this turn's raw Gemini output. Without this, any
+    turn whose raw Gemini slot_evidence is empty (a fallback turn, or
+    a lossy turn) wipes the cumulative history and the score drops.
+
+    Here T1 establishes strong evidence on goal_scope. T2's raw output
+    is empty (fallback-like). T2's saved slot_evidence must still
+    include the T1 verdicts so that turn 3's carry-forward keeps the
+    score intact.
+    """
+    strong_payload = _payload_with_strong_slots(
+        VALID_PAYLOAD.copy(),
+        [("goal_scope", "business_goal"), ("goal_scope", "in_scope_outcome")],
+        "track equipment bookings",
+    )
+    lossy_payload = json.loads(json.dumps(VALID_PAYLOAD))
+    lossy_payload["slot_evidence"] = []
+
+    repository = RequirementAnalysisRepository()
+    model = FakeRequirementAnalysisModel([strong_payload, lossy_payload])
+    client = TestClient(
+        create_app(
+            analysis_model=model,
+            analysis_repository=repository,
+        )
+    )
+    r1 = client.post(
+        "/analysis/requirement",
+        json={"requirement_text": "Track equipment bookings and damage."},
+    )
+    assert r1.status_code == 200
+    score1 = r1.json()["analysis"]["questionnaire"]["draft_readiness"]["score"]
+    # The saved slot_evidence on T1 must already carry the goal_scope verdicts.
+    saved1 = repository.get_analysis("AN-000001")
+    saved_keys1 = {(v.category_id, v.slot_id) for v in saved1.analysis.slot_evidence}
+    assert ("goal_scope", "business_goal") in saved_keys1
+    assert ("goal_scope", "in_scope_outcome") in saved_keys1
+
+    r2 = client.post(
+        "/analysis/requirement",
+        json={
+            "requirement_text": (
+                "Track equipment bookings and damage.\n\n"
+                "Previous question: [category: goal_scope] What is the goal?\n"
+                "Previous answer: track equipment bookings"
+            )
+        },
+    )
+    assert r2.status_code == 200
+    score2 = r2.json()["analysis"]["questionnaire"]["draft_readiness"]["score"]
+
+    # Cycle 2A guarantee: even though T2 returned no slot_evidence, the
+    # merged carry-forward still has T1's goal_scope verdicts → score
+    # never drops.
+    assert score2 >= score1, (
+        f"score regressed across lossy turn: {score1} → {score2}"
+    )
+    saved2 = repository.get_analysis("AN-000002")
+    saved_keys2 = {(v.category_id, v.slot_id) for v in saved2.analysis.slot_evidence}
+    assert ("goal_scope", "business_goal") in saved_keys2
+    assert ("goal_scope", "in_scope_outcome") in saved_keys2

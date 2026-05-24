@@ -360,6 +360,12 @@ def _with_questionnaire_state(
         *evidence_diagnostics,
     ]
     payload = analysis.model_dump()
+    # Cycle 2A: persist the MERGED slot_evidence (Gemini + Guard A + prior
+    # carry-forward) instead of just this turn's raw Gemini output. Without
+    # this, fallback turns wiped the cumulative history because their raw
+    # slot_evidence is empty, breaking carry-forward across the gap and
+    # letting the score drop on the turn after a fallback.
+    payload["slot_evidence"] = [v.model_dump() for v in verdicts]
     payload["questionnaire"] = {
         "draft_readiness": draft_readiness,
         "active_category_id": active_category_id,
