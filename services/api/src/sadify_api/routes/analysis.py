@@ -367,6 +367,14 @@ def _with_questionnaire_state(
     # slot_evidence is empty, breaking carry-forward across the gap and
     # letting the score drop on the turn after a fallback.
     payload["slot_evidence"] = [v.model_dump() for v in verdicts]
+    # Cycle 2B: preserve the prior turn's understanding_summary across
+    # fallback turns. Without this, the fallback's internal narrative
+    # ("SADify kept the business request...") leaks into the user-facing
+    # 'Current understanding' panel and into the SAD synthesis context.
+    if fallback_used and prior_analysis is not None:
+        prior_summary = (prior_analysis.understanding_summary or "").strip()
+        if prior_summary and "fallback" not in prior_summary.lower():
+            payload["understanding_summary"] = prior_summary
     payload["questionnaire"] = {
         "draft_readiness": draft_readiness,
         "active_category_id": active_category_id,

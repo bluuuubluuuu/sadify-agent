@@ -35,6 +35,15 @@ def build_sad_synthesis_context(
             "Current understanding:",
             analysis.understanding_summary,
             "",
+            "Cleared categories:",
+            "\n".join(_cleared_category_lines(analysis)),
+            "",
+            "Partial-evidence slots:",
+            "\n".join(_partial_evidence_lines(analysis)),
+            "",
+            "Deferred or unsure slots:",
+            "\n".join(_deferred_slot_lines(analysis)),
+            "",
             "Confirmed questionnaire answers:",
             "\n".join(_answer_lines(analysis)),
             "",
@@ -54,6 +63,44 @@ def build_sad_synthesis_context(
             "\n".join(f"- {item}" for item in internal_diagnostics) or "- none",
         ]
     )
+
+
+_READY_STATUSES = {"ready", "complete"}
+_CLEARED_VISIBILITIES = {"already_understood", "completed"}
+
+
+def _cleared_category_lines(analysis: RequirementAnalysisResponse) -> list[str]:
+    if analysis.questionnaire is None:
+        return ["- none"]
+    cleared = [
+        f"- {category.label} ({category.id}) — source: "
+        f"{'already understood' if category.visibility == 'already_understood' else 'questionnaire answer'}"
+        for category in analysis.questionnaire.categories
+        if category.status in _READY_STATUSES
+        and category.visibility in _CLEARED_VISIBILITIES
+    ]
+    return cleared or ["- none"]
+
+
+def _partial_evidence_lines(analysis: RequirementAnalysisResponse) -> list[str]:
+    partials = [
+        f"- {verdict.category_id}.{verdict.slot_id}: \"{verdict.evidence_quote}\""
+        for verdict in analysis.slot_evidence
+        if verdict.applicability == "applicable"
+        and verdict.strength == "partial"
+    ]
+    return partials or ["- none"]
+
+
+def _deferred_slot_lines(analysis: RequirementAnalysisResponse) -> list[str]:
+    if analysis.questionnaire is None:
+        return ["- none"]
+    deferred = [
+        f"- {answer.category_id}.{answer.slot_id or 'unknown'}: {answer.question}"
+        for answer in analysis.questionnaire.answers
+        if answer.is_uncertain
+    ]
+    return deferred or ["- none"]
 
 
 def clean_business_request(requirement_text: str) -> str:

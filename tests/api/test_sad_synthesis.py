@@ -149,6 +149,88 @@ def _clinic_fallback_analysis() -> RequirementAnalysisResponse:
     return RequirementAnalysisResponse.model_validate(payload)
 
 
+# --- Cycle 2B: SAD synthesis context completeness -------------------------
+
+
+def test_context_lists_every_cleared_category_for_section_emission():
+    """SAD context must enumerate every Ready category so the prompt can
+    require one SAD section per cleared category. Without this list,
+    Gemini omits categories like Data Records or NFR even when they're
+    cleared in the questionnaire."""
+    context = build_sad_synthesis_context(
+        requirement_text=CLINIC_REQUEST,
+        analysis_id="AN-000010",
+        analysis=_clinic_analysis_with_answers(),
+        source_context=None,
+        source_references=["Business Request"],
+    )
+    cleared_section = context.split("Cleared categories:", 1)[1].split(
+        "Partial-evidence slots:", 1
+    )[0]
+    assert "Workflow steps" in cleared_section
+    assert "Business rules and approvals" in cleared_section
+
+
+def test_context_lists_partial_slots_as_assumption_candidates():
+    """Slots with partial evidence are the source of Assumptions in the
+    final SAD. They must appear as their own block in the context."""
+    payload = _base_analysis_payload()
+    payload["slot_evidence"] = [
+        {
+            "category_id": "workflow_steps",
+            "slot_id": "handoffs",
+            "applicability": "applicable",
+            "strength": "partial",
+            "evidence_quote": "hand off to next role",
+            "rationale": "partial answer",
+        }
+    ]
+    payload["questionnaire"] = _clinic_analysis_with_answers().questionnaire.model_dump()
+    analysis = RequirementAnalysisResponse.model_validate(payload)
+    context = build_sad_synthesis_context(
+        requirement_text=CLINIC_REQUEST,
+        analysis_id="AN-000010",
+        analysis=analysis,
+        source_context=None,
+        source_references=[],
+    )
+    partial_section = context.split("Partial-evidence slots:", 1)[1].split(
+        "Deferred or unsure slots:", 1
+    )[0]
+    assert "workflow_steps.handoffs" in partial_section
+    assert "hand off to next role" in partial_section
+
+
+def test_context_lists_uncertain_answers_as_open_question_candidates():
+    """Slots the user marked Unsure feed the Open Questions list in the
+    final SAD. They must appear in the context."""
+    payload = _base_analysis_payload()
+    questionnaire = _clinic_analysis_with_answers().questionnaire.model_dump()
+    questionnaire["answers"].append(
+        {
+            "category_id": "rules_approvals",
+            "slot_id": "approval_path",
+            "question": "Who approves discounts?",
+            "answer": "I'm not sure yet",
+            "is_uncertain": True,
+        }
+    )
+    payload["questionnaire"] = questionnaire
+    analysis = RequirementAnalysisResponse.model_validate(payload)
+    context = build_sad_synthesis_context(
+        requirement_text=CLINIC_REQUEST,
+        analysis_id="AN-000010",
+        analysis=analysis,
+        source_context=None,
+        source_references=[],
+    )
+    deferred_section = context.split("Deferred or unsure slots:", 1)[1].split(
+        "Confirmed questionnaire answers:", 1
+    )[0]
+    assert "rules_approvals.approval_path" in deferred_section
+    assert "Who approves discounts?" in deferred_section
+
+
 def _base_analysis_payload() -> dict[str, object]:
     return {
         "understanding_summary": "The clinic needs one simple patient flow system.",

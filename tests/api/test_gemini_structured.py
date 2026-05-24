@@ -2695,6 +2695,62 @@ def test_guard_b_second_short_answer_removes_slot_from_question_queue():
     assert final["active_slot_id"] != "normal_flow"
 
 
+def test_understanding_summary_is_preserved_across_fallback_turn():
+    """Cycle 2B: when a turn falls back to the local template, the saved
+    understanding_summary must come from the prior turn — not the
+    fallback's diagnostic narrative ('SADify kept the business request...').
+    Without this, the user-facing 'Current understanding' panel and the
+    SAD synthesis context both get polluted with internal diagnostic text."""
+    good_payload = _payload_with_strong_slots(
+        VALID_PAYLOAD.copy(),
+        [("goal_scope", "business_goal"), ("goal_scope", "in_scope_outcome")],
+        "track equipment bookings",
+    )
+    good_payload["understanding_summary"] = (
+        "Small event rental company tracking bookings and returns."
+    )
+    drift_payload = json.loads(json.dumps(VALID_PAYLOAD))
+    drift_payload["next_question"]["target_category"] = "workflow_steps"
+    drift_payload["next_question"]["target_slot_id"] = "normal_flow"
+
+    repository = RequirementAnalysisRepository()
+    # 3 payloads: T1 succeeds, T2 drifts twice (both repair attempts) then
+    # the route falls through to the local fallback.
+    model = FakeRequirementAnalysisModel([good_payload, drift_payload, drift_payload])
+    client = TestClient(
+        create_app(
+            analysis_model=model,
+            analysis_repository=repository,
+        )
+    )
+    r1 = client.post(
+        "/analysis/requirement",
+        json={"requirement_text": "Track equipment bookings and damage."},
+    )
+    assert r1.status_code == 200
+    r2 = client.post(
+        "/analysis/requirement",
+        json={
+            "requirement_text": (
+                "Track equipment bookings and damage.\n\n"
+                "Previous question: [category: goal_scope] What is the goal?\n"
+                "Previous answer: track equipment bookings"
+            )
+        },
+    )
+    assert r2.status_code == 200
+    saved2 = repository.get_analysis("AN-000002")
+    summary = saved2.analysis.understanding_summary or ""
+    # Must NOT contain the fallback's diagnostic narrative.
+    assert "fallback" not in summary.lower(), (
+        f"fallback narrative leaked into understanding_summary: {summary!r}"
+    )
+    # SHOULD carry forward the prior real summary.
+    assert "rental" in summary.lower() or "booking" in summary.lower(), (
+        f"prior summary was not preserved: {summary!r}"
+    )
+
+
 def test_saved_slot_evidence_persists_merged_carry_forward():
     """Cycle 2A: saved slot_evidence must be the MERGED carry-forward
     list, not just this turn's raw Gemini output. Without this, any
