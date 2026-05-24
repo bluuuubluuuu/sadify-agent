@@ -79,10 +79,13 @@ def create_analysis_router(
         # Diagnostic: was carry-forward able to find a prior turn for this
         # session? If prior_found=False on every turn the user takes, the
         # carry-forward never engages and readiness rebuilds from scratch.
-        logger.info(
-            "analysis_request guest_draft_id=%r prior_found=%s",
+        # Logged at WARNING level so uvicorn's default filter shows it next
+        # to the existing analysis_validation_failed line.
+        logger.warning(
+            "analysis_request guest_draft_id=%r prior_found=%s prior_id=%s",
             request.guest_draft_id,
             prior_record is not None,
+            prior_record.analysis_id if prior_record is not None else None,
         )
         for repair in (False, True):
             raw_json = ""
