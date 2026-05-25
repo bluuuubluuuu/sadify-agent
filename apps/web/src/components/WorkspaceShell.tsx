@@ -6,6 +6,7 @@ import { AuthPanel } from "./AuthPanel";
 import type {
   RequirementAnalysisApiResponse,
   SadPreviewApiResponse,
+  SadSaveApiResponse,
   SourceUploadResponse,
 } from "../lib/api";
 import type { CategoryStatus, WorkspaceState } from "../lib/mockState";
@@ -79,6 +80,21 @@ export function WorkspaceShell({ state }: Props) {
           ? `${response.preview.open_questions.length} open question(s) visible`
           : "No open questions returned",
         "Project files not saved to Drive yet",
+      ],
+    }));
+  }
+
+  function applySadSaved(response: SadSaveApiResponse) {
+    setWorkspaceState((current) => ({
+      ...current,
+      changeSummary: response.record.change_summary,
+      projectStatus: [
+        `SAD saved: ${response.record.save_id}`,
+        `Google Doc placeholder: ${response.record.sad_doc.path}`,
+        `Repo: ${response.record.repo_folder_name}`,
+        response.record.source_artifact_references.length
+          ? `${response.record.source_artifact_references.length} source reference(s) linked`
+          : "No uploaded source references linked",
       ],
     }));
   }
@@ -175,6 +191,7 @@ export function WorkspaceShell({ state }: Props) {
         sourceContext={sourceContext}
         sourceReferences={sourceReferences}
         onPreviewSaved={applySadPreview}
+        onSadSaved={applySadSaved}
       />
 
       <ChangeSummary

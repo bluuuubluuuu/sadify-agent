@@ -3,9 +3,12 @@
 import { useEffect, useState } from "react";
 import {
   generateSadPreview,
+  saveSadPreview,
   type RequirementAnalysisApiResponse,
   type SadPreviewApiResponse,
+  type SadSaveApiResponse,
 } from "../lib/api";
+import { getFirebaseAuth } from "../lib/firebaseClient";
 
 type Props = {
   analysisResponse: RequirementAnalysisApiResponse | null;
@@ -13,6 +16,7 @@ type Props = {
   sourceContext?: string;
   sourceReferences?: string[];
   onPreviewSaved: (response: SadPreviewApiResponse) => void;
+  onSadSaved: (response: SadSaveApiResponse) => void;
 };
 
 const readinessLabel: Record<string, string> = {
@@ -27,17 +31,23 @@ export function SadPreviewPanel({
   sourceContext = "",
   sourceReferences = [],
   onPreviewSaved,
+  onSadSaved,
 }: Props) {
   const [previewResponse, setPreviewResponse] =
     useState<SadPreviewApiResponse | null>(null);
+  const [saveResponse, setSaveResponse] = useState<SadSaveApiResponse | null>(null);
   const [message, setMessage] = useState(
     "Temporary preview only. No Google Doc or Drive file is saved here.",
   );
+  const [saveMessage, setSaveMessage] = useState("");
   const [isBusy, setIsBusy] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
   const analysisId = analysisResponse?.analysis_id;
 
   useEffect(() => {
     setPreviewResponse(null);
+    setSaveResponse(null);
+    setSaveMessage("");
     setMessage("Temporary preview only. No Google Doc or Drive file is saved here.");
   }, [analysisId, requirementText]);
 
@@ -71,7 +81,38 @@ export function SadPreviewPanel({
     }
   }
 
+  async function savePreviewToProjectRepo() {
+    if (!previewResponse) {
+      setSaveMessage("Generate a SAD preview before saving.");
+      return;
+    }
+    const user = getFirebaseAuth().currentUser;
+    if (!user) {
+      setSaveMessage("Sign in before saving the SAD preview.");
+      return;
+    }
+
+    setIsSaving(true);
+    setSaveMessage("Saving SAD preview to project repo...");
+    try {
+      const idToken = await user.getIdToken();
+      const response = await saveSadPreview(previewResponse.preview_id, idToken);
+      setSaveResponse(response);
+      onSadSaved(response);
+      setSaveMessage("Saved to project repo.");
+    } catch (error) {
+      setSaveMessage(
+        error instanceof Error
+          ? error.message
+          : "SADify could not save this SAD preview yet.",
+      );
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
   const preview = previewResponse?.preview;
+  const record = saveResponse?.record;
   const visibleTrackingPaths =
     preview?.change_tracking.paths.filter(
       (path) => !path.startsWith("_SADify/"),
@@ -96,10 +137,25 @@ export function SadPreviewPanel({
         Generate SAD preview
       </button>
 
+      {previewResponse ? (
+        <button
+          type="button"
+          className="secondary-button"
+          disabled={isSaving}
+          onClick={savePreviewToProjectRepo}
+        >
+          Save to project repo
+        </button>
+      ) : null}
+
       {!analysisResponse ? (
         <small className="sad-preview-note">
           Start analysis before creating a temporary preview.
         </small>
+      ) : null}
+
+      {saveMessage ? (
+        <small className="sad-preview-note">{saveMessage}</small>
       ) : null}
 
       {preview ? (
@@ -124,6 +180,18 @@ export function SadPreviewPanel({
               )}
             </div>
           </div>
+
+          {record ? (
+            <div className="sad-save-result">
+              <p className="eyebrow">Saved to project repo</p>
+              <strong>{record.sad_doc.title}</strong>
+              <p>{record.sad_doc.path}</p>
+              {record.sad_doc.url ? (
+                <a href={record.sad_doc.url}>{record.sad_doc.url}</a>
+              ) : null}
+              <p>{record.change_summary}</p>
+            </div>
+          ) : null}
 
           <details className="it-readiness">
             <summary>Later implementation review</summary>

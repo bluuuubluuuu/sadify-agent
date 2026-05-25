@@ -149,6 +149,64 @@ export type SadPreviewApiResponse = {
   preview: SadPreviewResponse;
 };
 
+export type SadSaveArtifact = {
+  artifact_id: string;
+  artifact_type: "google_doc" | "manifest" | "change_log" | "source_reference";
+  title: string;
+  path: string;
+  file_id: string | null;
+  url: string | null;
+  mime_type: string | null;
+  source_ids: string[];
+  created_at: string;
+};
+
+export type SadSaveManifest = {
+  manifest_id: string;
+  repo_grant_id: string;
+  repo_folder_id: string;
+  repo_folder_name: string;
+  preview_id: string;
+  preview_revision: string;
+  analysis_id: string | null;
+  requirement_text: string;
+  sad_title: string;
+  preview_section_count: number;
+  preview_assumption_count: number;
+  preview_open_question_count: number;
+  preview_source_references: string[];
+  source_ids: string[];
+  artifact_paths: string[];
+  saved_at: string;
+};
+
+export type SadSaveRecord = {
+  save_id: string;
+  idempotency_key: string;
+  owner_uid: string;
+  owner_email: string | null;
+  project_id: string;
+  repo_grant_id: string;
+  repo_folder_id: string;
+  repo_folder_name: string;
+  preview_id: string;
+  preview_revision: string;
+  status: "saved";
+  sad_doc: SadSaveArtifact;
+  artifacts: SadSaveArtifact[];
+  manifest: SadSaveManifest;
+  change_summary: string;
+  source_artifact_references: SadSaveArtifact[];
+  created_at: string;
+  updated_at: string;
+};
+
+export type SadSaveApiResponse = {
+  saved: boolean;
+  record: SadSaveRecord;
+  message: string;
+};
+
 export type TraceabilityUnit = {
   unit_type: string;
   unit_name: string | null;
@@ -353,6 +411,30 @@ export async function generateSadPreview(input: {
   if (!response.ok) {
     throw new Error(
       await readBackendError(response, "SADify could not generate the SAD preview yet."),
+    );
+  }
+
+  return response.json();
+}
+
+export async function saveSadPreview(
+  previewId: string,
+  idToken: string,
+): Promise<SadSaveApiResponse> {
+  const response = await fetch(`${baseUrl}/sad/save`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${idToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      preview_id: previewId,
+    }),
+  });
+
+  if (!response.ok) {
+    throw new Error(
+      await readBackendError(response, "SADify could not save this SAD preview yet."),
     );
   }
 
