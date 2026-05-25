@@ -5,6 +5,7 @@ from pydantic import ValidationError
 
 logger = logging.getLogger(__name__)
 
+from sadify_api.config import ApiConfig, load_api_config
 from sadify_api.routes.auth import verify_authorization_header
 from sadify_api.schemas import (
     SadPreviewApiResponse,
@@ -13,6 +14,7 @@ from sadify_api.schemas import (
     SadSaveRequest,
 )
 from sadify_api.services.auth import TokenVerifier
+from sadify_api.services.drive_client import DriveClient
 from sadify_api.services.drive_repo import DriveRepoRepository
 from sadify_api.services.gemini_structured import (
     SadPreviewModel,
@@ -26,7 +28,13 @@ from sadify_api.services.sad_preview import (
     with_requested_source_references,
 )
 from sadify_api.services.sad_synthesis import clean_business_request
-from sadify_api.services.sad_save import SadSaveRepository
+from sadify_api.services.sad_save import (
+    SadSaveDriveUploadError,
+    SadSaveRepository,
+    SadSaveTokenInvalidError,
+    SadSaveTokenMissingError,
+)
+from sadify_api.services.secret_store import SecretStore, get_secret_store
 from sadify_api.services.source_uploads import SourceRepository
 
 
@@ -37,7 +45,11 @@ def create_sad_router(
     drive_repo_repository: DriveRepoRepository,
     source_repository: SourceRepository,
     sad_save_repository: SadSaveRepository,
+    config: ApiConfig | None = None,
+    drive_client: DriveClient | None = None,
+    secret_store: SecretStore | None = None,
 ) -> APIRouter:
+    config = config or load_api_config()
     router = APIRouter(prefix="/sad", tags=["sad"])
 
     @router.post("/preview", response_model=SadPreviewApiResponse)
@@ -185,13 +197,43 @@ def create_sad_router(
             sources.append(source)
             seen_source_ids.add(source_id)
 
-        record = sad_save_repository.save_preview(
-            owner_uid=user.uid,
-            owner_email=user.email,
-            repo=repo,
-            preview_record=preview_record,
-            sources=sources,
-        )
+        try:
+            live_drive_client = drive_client
+            live_secret_store = secret_store
+            if config.drive_mode == "live":
+                live_drive_client, live_secret_store = _resolve_live_services(
+                    config=config,
+                    drive_client=drive_client,
+                    secret_store=secret_store,
+                )
+            record = sad_save_repository.save_preview(
+                owner_uid=user.uid,
+                owner_email=user.email,
+                repo=repo,
+                preview_record=preview_record,
+                sources=sources,
+                mode=config.drive_mode,
+                drive_client=live_drive_client,
+                secret_store=live_secret_store,
+            )
+        except SadSaveTokenMissingError as exc:
+            raise _sad_save_error(
+                409,
+                "SAD_SAVE_TOKEN_MISSING",
+                "Reconnect Google Drive before saving.",
+            ) from exc
+        except SadSaveTokenInvalidError as exc:
+            raise _sad_save_error(
+                401,
+                "SAD_SAVE_TOKEN_INVALID",
+                "Reconnect Google Drive to renew permission.",
+            ) from exc
+        except SadSaveDriveUploadError as exc:
+            raise _sad_save_error(
+                502,
+                "SAD_SAVE_DRIVE_UPLOAD_FAILED",
+                "Google Drive rejected the upload.",
+            ) from exc
         return SadSaveApiResponse(
             saved=True,
             record=record,
@@ -199,6 +241,32 @@ def create_sad_router(
         )
 
     return router
+
+
+def _resolve_live_services(
+    *,
+    config: ApiConfig,
+    drive_client: DriveClient | None,
+    secret_store: SecretStore | None,
+) -> tuple[DriveClient, SecretStore]:
+    if drive_client is not None and secret_store is not None:
+        return drive_client, secret_store
+    if not config.tc026b_live:
+        raise _sad_save_error(
+            503,
+            "SAD_SAVE_LIVE_MODE_DISABLED",
+            "Live Drive save is disabled for this process.",
+        )
+
+    resolved_secret_store = secret_store or get_secret_store(
+        project_id=config.google_cloud_project,
+        oauth_client_secret_name=config.google_oauth_client_secret_name,
+    )
+    resolved_drive_client = drive_client or DriveClient(
+        client_id=config.google_oauth_client_id,
+        client_secret=resolved_secret_store.get_oauth_client_secret(),
+    )
+    return resolved_drive_client, resolved_secret_store
 
 
 def _sad_save_error(status_code: int, code: str, message: str) -> HTTPException:

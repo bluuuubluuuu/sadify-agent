@@ -5,9 +5,17 @@ from sadify_api.schemas import (
     DriveRepoFolder,
     DriveRepoRecord,
 )
+from sadify_api.services.drive_client import (
+    DRIVE_FILE_SCOPE,
+    DriveClient,
+    DriveFolderCreateError,
+    DriveOauthExchangeError,
+)
+from sadify_api.services.secret_store import SecretStore
 
 
-DRIVE_FILE_SCOPE = "https://www.googleapis.com/auth/drive.file"
+class DriveTokenPersistError(Exception):
+    pass
 
 DEFAULT_PROJECT_REPO_STRUCTURE = [
     DriveRepoFolder(
@@ -43,8 +51,23 @@ class DriveRepoRepository:
         owner_email: str | None,
         request: DriveRepoConnectRequest,
         connected_at: datetime | None = None,
+        mode: str = "local",
+        drive_client: DriveClient | None = None,
+        secret_store: SecretStore | None = None,
+        drive_folder_name: str = "SADify Projects",
     ) -> DriveRepoRecord:
         now = connected_at or datetime.now(UTC)
+        if mode == "live":
+            return self._connect_live_repo(
+                owner_uid=owner_uid,
+                owner_email=owner_email,
+                request=request,
+                connected_at=now,
+                drive_client=drive_client,
+                secret_store=secret_store,
+                drive_folder_name=drive_folder_name,
+            )
+
         grant_id = f"DG-{self._next_grant_number:06d}"
         self._next_grant_number += 1
         repo_folder_id = request.repo_folder_id
@@ -73,6 +96,65 @@ class DriveRepoRepository:
             saves_blocked=False,
             created_at=now,
             updated_at=now,
+        )
+        self._records[grant_id] = record
+        self._active_by_owner[owner_uid] = grant_id
+        return record
+
+    def _connect_live_repo(
+        self,
+        *,
+        owner_uid: str,
+        owner_email: str | None,
+        request: DriveRepoConnectRequest,
+        connected_at: datetime,
+        drive_client: DriveClient | None,
+        secret_store: SecretStore | None,
+        drive_folder_name: str,
+    ) -> DriveRepoRecord:
+        if drive_client is None or secret_store is None:
+            raise DriveOauthExchangeError("Live Drive dependencies are not configured.")
+
+        tokens = drive_client.exchange_authorization_code(
+            request.authorization_code,
+            "postmessage",
+        )
+        if not tokens.refresh_token:
+            raise DriveOauthExchangeError("Google did not return a refresh token.")
+
+        try:
+            secret_store.put_user_refresh_token(owner_uid, tokens.refresh_token)
+        except Exception as exc:
+            raise DriveTokenPersistError(
+                "Could not securely store Drive refresh token."
+            ) from exc
+
+        folder = drive_client.find_or_create_folder(
+            tokens.access_token,
+            drive_folder_name,
+        )
+        grant_id = f"DG-{self._next_grant_number:06d}"
+        self._next_grant_number += 1
+
+        existing_active = self.get_active_repo(owner_uid)
+        if existing_active:
+            self.disconnect_repo(owner_uid=owner_uid, disconnected_at=connected_at)
+
+        record = DriveRepoRecord(
+            grant_id=grant_id,
+            project_id=request.project_id,
+            owner_uid=owner_uid,
+            owner_email=owner_email,
+            status="connected",
+            repo_folder_id=folder.folder_id,
+            repo_folder_name=folder.name,
+            repo_url=f"https://drive.google.com/drive/folders/{folder.folder_id}",
+            requested_scopes=[DRIVE_FILE_SCOPE],
+            folder_structure=list(DEFAULT_PROJECT_REPO_STRUCTURE),
+            token_store="secret_manager",
+            saves_blocked=False,
+            created_at=connected_at,
+            updated_at=connected_at,
         )
         self._records[grant_id] = record
         self._active_by_owner[owner_uid] = grant_id

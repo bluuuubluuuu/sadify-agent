@@ -9,6 +9,25 @@ from sadify_api.schemas import (
     SadSaveRecord,
     SourceRecord,
 )
+from sadify_api.services.drive_client import (
+    DriveClient,
+    DriveTokenInvalidError,
+    DriveUploadError,
+)
+from sadify_api.services.sad_markdown import compose_sad_markdown
+from sadify_api.services.secret_store import SecretStore
+
+
+class SadSaveTokenMissingError(Exception):
+    pass
+
+
+class SadSaveTokenInvalidError(Exception):
+    pass
+
+
+class SadSaveDriveUploadError(Exception):
+    pass
 
 
 class SadSaveRepository:
@@ -29,6 +48,9 @@ class SadSaveRepository:
         preview_record: SadPreviewRecord,
         sources: list[SourceRecord],
         saved_at: datetime | None = None,
+        mode: str = "local",
+        drive_client: DriveClient | None = None,
+        secret_store: SecretStore | None = None,
     ) -> SadSaveRecord:
         now = saved_at or datetime.now(UTC)
         preview_revision = preview_record.created_at.isoformat()
@@ -118,9 +140,74 @@ class SadSaveRepository:
             created_at=now,
             updated_at=now,
         )
+        if mode == "live":
+            record = self._with_live_drive_artifact(
+                record=record,
+                repo=repo,
+                owner_uid=owner_uid,
+                preview_record=preview_record,
+                drive_client=drive_client,
+                secret_store=secret_store,
+                updated_at=now,
+            )
+
         self._records[save_id] = record
         self._by_idempotency_key[idempotency_key] = save_id
         return record
+
+    def _with_live_drive_artifact(
+        self,
+        *,
+        record: SadSaveRecord,
+        repo: DriveRepoRecord,
+        owner_uid: str,
+        preview_record: SadPreviewRecord,
+        drive_client: DriveClient | None,
+        secret_store: SecretStore | None,
+        updated_at: datetime,
+    ) -> SadSaveRecord:
+        if drive_client is None or secret_store is None:
+            raise SadSaveTokenMissingError("Live Drive dependencies are not configured.")
+        refresh_token = secret_store.get_user_refresh_token(owner_uid)
+        if not refresh_token:
+            raise SadSaveTokenMissingError("Drive refresh token is missing.")
+        try:
+            access_token = drive_client.refresh_access_token(refresh_token)
+        except DriveTokenInvalidError as exc:
+            raise SadSaveTokenInvalidError(
+                "Drive refresh token is invalid or expired."
+            ) from exc
+        try:
+            upload = drive_client.upload_markdown_as_doc(
+                access_token=access_token,
+                folder_id=repo.repo_folder_id,
+                title=preview_record.preview.title,
+                markdown=compose_sad_markdown(preview_record.preview),
+            )
+        except DriveUploadError as exc:
+            raise SadSaveDriveUploadError("Google Drive rejected the upload.") from exc
+
+        sad_doc = record.sad_doc.model_copy(
+            update={
+                "file_id": upload.file_id,
+                "url": upload.web_view_link,
+            }
+        )
+        artifacts = [
+            sad_doc if artifact.artifact_id == record.sad_doc.artifact_id else artifact
+            for artifact in record.artifacts
+        ]
+        return record.model_copy(
+            update={
+                "sad_doc": sad_doc,
+                "artifacts": artifacts,
+                "change_summary": (
+                    f"SAD preview {preview_record.preview_id} saved to "
+                    f"{repo.repo_folder_name} as Google Doc {upload.web_view_link}."
+                ),
+                "updated_at": updated_at,
+            }
+        )
 
     def get_save(self, save_id: str) -> SadSaveRecord | None:
         return self._records.get(save_id)

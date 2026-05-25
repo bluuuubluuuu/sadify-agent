@@ -1,4 +1,8 @@
 google-adk>=1.32.0
+google-api-python-client>=2.130,<3
+google-auth>=2.30,<3
+google-auth-oauthlib>=1.2,<2
+google-cloud-secret-manager>=2.20,<3
 google-genai>=1.55.0
 streamlit>=1.57.0
 pydantic>=2.13.0

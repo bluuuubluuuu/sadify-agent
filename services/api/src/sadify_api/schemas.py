@@ -416,7 +416,7 @@ class DriveRepoRecord(ApiModel):
     repo_url: str
     requested_scopes: list[str]
     folder_structure: list[DriveRepoFolder]
-    token_store: Literal["local_metadata_only", "secret_manager_pending"]
+    token_store: Literal["local_metadata_only", "secret_manager_pending", "secret_manager"]
     saves_blocked: bool
     created_at: datetime
     updated_at: datetime

@@ -21,8 +21,10 @@ from sadify_api.services.gemini_structured import (
 from sadify_api.services.guest_drafts import GuestDraftRepository
 from sadify_api.services.source_uploads import SourceRepository
 from sadify_api.services.drive_repo import DriveRepoRepository
+from sadify_api.services.drive_client import DriveClient
 from sadify_api.services.sad_preview import SadPreviewRepository
 from sadify_api.services.sad_save import SadSaveRepository
+from sadify_api.services.secret_store import SecretStore
 
 
 def create_app(
@@ -36,6 +38,8 @@ def create_app(
     sad_preview_model: SadPreviewModel | None = None,
     sad_preview_repository: SadPreviewRepository | None = None,
     sad_save_repository: SadSaveRepository | None = None,
+    drive_client: DriveClient | None = None,
+    secret_store: SecretStore | None = None,
 ) -> FastAPI:
     config = config or load_api_config()
     token_verifier = token_verifier or FirebaseAdminTokenVerifier(config)
@@ -60,7 +64,15 @@ def create_app(
     app.include_router(create_drafts_router(draft_repository, token_verifier))
     app.include_router(create_analysis_router(analysis_model, analysis_repository))
     app.include_router(create_sources_router(source_repository))
-    app.include_router(create_drive_router(drive_repo_repository, token_verifier))
+    app.include_router(
+        create_drive_router(
+            drive_repo_repository,
+            token_verifier,
+            config,
+            drive_client,
+            secret_store,
+        )
+    )
     app.include_router(
         create_sad_router(
             sad_preview_model,
@@ -69,6 +81,9 @@ def create_app(
             drive_repo_repository,
             source_repository,
             sad_save_repository,
+            config,
+            drive_client,
+            secret_store,
         )
     )
     if config.diagnostics_enabled:
