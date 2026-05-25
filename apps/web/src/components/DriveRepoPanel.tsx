@@ -23,6 +23,7 @@ export function DriveRepoPanel() {
       : "Configuration needed before live Google Drive connection.",
   );
   const [isBusy, setIsBusy] = useState(false);
+  const showLocalDevConnect = !isGoogleOAuthConfigured();
 
   async function connectRepo() {
     const user = getFirebaseAuth().currentUser;
@@ -49,6 +50,37 @@ export function DriveRepoPanel() {
       });
       setRepo(connected);
       setMessage("Project repo connected. Saves are now allowed for this repo.");
+    } catch (error) {
+      setMessage(
+        error instanceof Error
+          ? error.message
+          : "Could not connect Google Drive.",
+      );
+    } finally {
+      setIsBusy(false);
+    }
+  }
+
+  async function connectLocalDevRepo() {
+    const user = getFirebaseAuth().currentUser;
+    if (!user) {
+      setMessage("Sign in first, then connect Google Drive.");
+      return;
+    }
+
+    setIsBusy(true);
+    setMessage("Connecting local dev repo...");
+    try {
+      const idToken = await user.getIdToken();
+      const connected = await connectDriveRepo({
+        idToken,
+        projectId: DEFAULT_PROJECT_ID,
+        authorizationCode: "LOCAL-DEV-STUB-CODE",
+        repoFolderName: repoName,
+        createNewRepo: true,
+      });
+      setRepo(connected);
+      setMessage("Local dev repo connected (no live Drive call).");
     } catch (error) {
       setMessage(
         error instanceof Error
@@ -108,6 +140,16 @@ export function DriveRepoPanel() {
         >
           Connect Google Drive
         </button>
+        {showLocalDevConnect ? (
+          <button
+            type="button"
+            className="secondary-button"
+            disabled={isBusy || !repoName.trim()}
+            onClick={connectLocalDevRepo}
+          >
+            Connect (local dev)
+          </button>
+        ) : null}
         <button
           type="button"
           className="secondary-button"
@@ -118,8 +160,10 @@ export function DriveRepoPanel() {
         </button>
       </div>
 
-      {!isGoogleOAuthConfigured() ? (
-        <small className="drive-note">Configuration needed</small>
+      {showLocalDevConnect ? (
+        <small className="drive-note">
+          Local dev only. Replaced by real OAuth in TC-026B.
+        </small>
       ) : null}
 
       {repo ? (

@@ -68,6 +68,8 @@ export function SadPreviewPanel({
         sourceReferences,
       });
       setPreviewResponse(response);
+      setSaveResponse(null);
+      setSaveMessage("");
       onPreviewSaved(response);
       setMessage(`Temporary preview ${response.preview_id} saved in backend state.`);
     } catch (error) {

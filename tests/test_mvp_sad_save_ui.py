@@ -49,6 +49,21 @@ def test_sad_save_renders_saved_and_error_states():
     assert "saveMessage" in panel
 
 
+def test_sad_save_state_resets_when_preview_is_regenerated():
+    panel = (WEB_SRC / "components" / "SadPreviewPanel.tsx").read_text(
+        encoding="utf-8"
+    )
+
+    create_preview_body = panel.split("async function createPreview()", 1)[1].split(
+        "async function savePreviewToProjectRepo", 1
+    )[0]
+    set_preview_index = create_preview_body.index("setPreviewResponse(response);")
+    success_tail = create_preview_body[set_preview_index:].split("    } catch", 1)[0]
+
+    assert "setSaveResponse(null);" in success_tail
+    assert "setSaveMessage(" in success_tail
+
+
 def test_workspace_tracking_updates_after_sad_save():
     shell = (WEB_SRC / "components" / "WorkspaceShell.tsx").read_text(
         encoding="utf-8"
