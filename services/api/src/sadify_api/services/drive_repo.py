@@ -106,3 +106,16 @@ class DriveRepoRepository:
         if not grant_id:
             return None
         return self._records.get(grant_id)
+
+    def get_latest_repo(self, owner_uid: str) -> DriveRepoRecord | None:
+        active = self.get_active_repo(owner_uid)
+        if active:
+            return active
+        owned_records = [
+            record
+            for record in self._records.values()
+            if record.owner_uid == owner_uid
+        ]
+        if not owned_records:
+            return None
+        return max(owned_records, key=lambda record: record.updated_at)

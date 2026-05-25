@@ -22,6 +22,7 @@ from sadify_api.services.guest_drafts import GuestDraftRepository
 from sadify_api.services.source_uploads import SourceRepository
 from sadify_api.services.drive_repo import DriveRepoRepository
 from sadify_api.services.sad_preview import SadPreviewRepository
+from sadify_api.services.sad_save import SadSaveRepository
 
 
 def create_app(
@@ -34,6 +35,7 @@ def create_app(
     drive_repo_repository: DriveRepoRepository | None = None,
     sad_preview_model: SadPreviewModel | None = None,
     sad_preview_repository: SadPreviewRepository | None = None,
+    sad_save_repository: SadSaveRepository | None = None,
 ) -> FastAPI:
     config = config or load_api_config()
     token_verifier = token_verifier or FirebaseAdminTokenVerifier(config)
@@ -44,6 +46,7 @@ def create_app(
     drive_repo_repository = drive_repo_repository or DriveRepoRepository()
     sad_preview_model = sad_preview_model or GeminiSadPreviewModel(config)
     sad_preview_repository = sad_preview_repository or SadPreviewRepository()
+    sad_save_repository = sad_save_repository or SadSaveRepository()
     app = FastAPI(title="SADify API", version="0.1.0")
     app.add_middleware(
         CORSMiddleware,
@@ -58,7 +61,16 @@ def create_app(
     app.include_router(create_analysis_router(analysis_model, analysis_repository))
     app.include_router(create_sources_router(source_repository))
     app.include_router(create_drive_router(drive_repo_repository, token_verifier))
-    app.include_router(create_sad_router(sad_preview_model, sad_preview_repository))
+    app.include_router(
+        create_sad_router(
+            sad_preview_model,
+            sad_preview_repository,
+            token_verifier,
+            drive_repo_repository,
+            source_repository,
+            sad_save_repository,
+        )
+    )
     if config.diagnostics_enabled:
         app.include_router(create_diagnostics_router(config))
 

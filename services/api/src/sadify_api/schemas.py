@@ -295,6 +295,68 @@ class SadPreviewApiResponse(ApiModel):
     preview: SadPreviewResponse
 
 
+class SadSaveRequest(ApiModel):
+    preview_id: str | None = None
+
+
+class SadSaveArtifact(ApiModel):
+    artifact_id: str
+    artifact_type: Literal["google_doc", "manifest", "change_log", "source_reference"]
+    title: str
+    path: str
+    file_id: str | None
+    url: str | None
+    mime_type: str | None
+    source_ids: list[str]
+    created_at: datetime
+
+
+class SadSaveManifest(ApiModel):
+    manifest_id: str
+    repo_grant_id: str
+    repo_folder_id: str
+    repo_folder_name: str
+    preview_id: str
+    preview_revision: str
+    analysis_id: str | None
+    requirement_text: str
+    sad_title: str
+    preview_section_count: int
+    preview_assumption_count: int
+    preview_open_question_count: int
+    preview_source_references: list[str]
+    source_ids: list[str]
+    artifact_paths: list[str]
+    saved_at: datetime
+
+
+class SadSaveRecord(ApiModel):
+    save_id: str
+    idempotency_key: str
+    owner_uid: str
+    owner_email: str | None
+    project_id: str
+    repo_grant_id: str
+    repo_folder_id: str
+    repo_folder_name: str
+    preview_id: str
+    preview_revision: str
+    status: Literal["saved"]
+    sad_doc: SadSaveArtifact
+    artifacts: list[SadSaveArtifact]
+    manifest: SadSaveManifest
+    change_summary: str
+    source_artifact_references: list[SadSaveArtifact]
+    created_at: datetime
+    updated_at: datetime
+
+
+class SadSaveApiResponse(ApiModel):
+    saved: bool
+    record: SadSaveRecord
+    message: str
+
+
 class TraceabilityUnit(ApiModel):
     unit_type: str = Field(min_length=1)
     unit_name: str | None = None

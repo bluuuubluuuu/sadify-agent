@@ -1,14 +1,19 @@
 import logging
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Header, HTTPException
 from pydantic import ValidationError
 
 logger = logging.getLogger(__name__)
 
+from sadify_api.routes.auth import verify_authorization_header
 from sadify_api.schemas import (
     SadPreviewApiResponse,
     SadPreviewRequest,
+    SadSaveApiResponse,
+    SadSaveRequest,
 )
+from sadify_api.services.auth import TokenVerifier
+from sadify_api.services.drive_repo import DriveRepoRepository
 from sadify_api.services.gemini_structured import (
     SadPreviewModel,
     parse_sad_preview,
@@ -21,11 +26,17 @@ from sadify_api.services.sad_preview import (
     with_requested_source_references,
 )
 from sadify_api.services.sad_synthesis import clean_business_request
+from sadify_api.services.sad_save import SadSaveRepository
+from sadify_api.services.source_uploads import SourceRepository
 
 
 def create_sad_router(
     model: SadPreviewModel,
     repository: SadPreviewRepository,
+    token_verifier: TokenVerifier,
+    drive_repo_repository: DriveRepoRepository,
+    source_repository: SourceRepository,
+    sad_save_repository: SadSaveRepository,
 ) -> APIRouter:
     router = APIRouter(prefix="/sad", tags=["sad"])
 
@@ -107,4 +118,91 @@ def create_sad_router(
             preview=record.preview,
         )
 
+    @router.post("/save", response_model=SadSaveApiResponse)
+    def save_preview(
+        request: SadSaveRequest,
+        authorization: str | None = Header(default=None),
+    ) -> SadSaveApiResponse:
+        try:
+            user = verify_authorization_header(authorization, token_verifier)
+        except HTTPException as exc:
+            if exc.status_code == 401:
+                raise _sad_save_error(
+                    401,
+                    "SAD_SAVE_AUTH_REQUIRED",
+                    "Sign in before saving the SAD preview.",
+                ) from exc
+            raise
+
+        preview_id = (request.preview_id or "").strip()
+        if not preview_id:
+            raise _sad_save_error(
+                400,
+                "SAD_SAVE_PREVIEW_REQUIRED",
+                "Generate a SAD preview before saving.",
+            )
+
+        repo = drive_repo_repository.get_active_repo(user.uid)
+        if repo is None:
+            latest_repo = drive_repo_repository.get_latest_repo(user.uid)
+            if latest_repo and (
+                latest_repo.status == "disconnected" or latest_repo.saves_blocked
+            ):
+                raise _sad_save_error(
+                    409,
+                    "SAD_SAVE_REPO_DISCONNECTED",
+                    "Reconnect Google Drive before saving.",
+                )
+            raise _sad_save_error(
+                409,
+                "SAD_SAVE_REPO_REQUIRED",
+                "Connect a Google Drive project repo before saving.",
+            )
+        if repo.status == "disconnected" or repo.saves_blocked:
+            raise _sad_save_error(
+                409,
+                "SAD_SAVE_REPO_DISCONNECTED",
+                "Reconnect Google Drive before saving.",
+            )
+
+        preview_record = repository.get_preview(preview_id)
+        if preview_record is None:
+            raise _sad_save_error(
+                404,
+                "SAD_SAVE_PREVIEW_NOT_FOUND",
+                "This SAD preview is no longer available. Generate it again before saving.",
+            )
+
+        sources = []
+        seen_source_ids = set()
+        for source_reference in preview_record.preview.source_references:
+            source_id = source_reference.strip()
+            if not source_id.startswith("SRC-") or source_id in seen_source_ids:
+                continue
+            source = source_repository.get_source(source_id)
+            if source is None:
+                continue
+            sources.append(source)
+            seen_source_ids.add(source_id)
+
+        record = sad_save_repository.save_preview(
+            owner_uid=user.uid,
+            owner_email=user.email,
+            repo=repo,
+            preview_record=preview_record,
+            sources=sources,
+        )
+        return SadSaveApiResponse(
+            saved=True,
+            record=record,
+            message="SAD preview saved to the local project repo record.",
+        )
+
     return router
+
+
+def _sad_save_error(status_code: int, code: str, message: str) -> HTTPException:
+    return HTTPException(
+        status_code=status_code,
+        detail={"code": code, "message": message},
+    )
