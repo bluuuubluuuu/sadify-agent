@@ -127,7 +127,7 @@ def _resolve_live_services(
 ) -> tuple[DriveClient, SecretStore]:
     if drive_client is not None and secret_store is not None:
         return drive_client, secret_store
-    if not config.tc026b_live:
+    if not config.drive_live_enabled:
         raise _drive_error(
             503,
             "DRIVE_LIVE_MODE_DISABLED",

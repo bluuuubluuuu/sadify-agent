@@ -17,7 +17,7 @@ class ApiConfig:
     drive_folder_name: str = "SADify Projects"
     google_oauth_client_id: str = ""
     google_oauth_client_secret_name: str = "sadify-drive-oauth-client-secret"
-    tc026b_live: bool = False
+    drive_live_enabled: bool = False
 
 
 def load_api_config() -> ApiConfig:
@@ -62,7 +62,7 @@ def load_api_config() -> ApiConfig:
         google_oauth_client_secret_name=(
             google_oauth_client_secret_name or "sadify-drive-oauth-client-secret"
         ),
-        tc026b_live=_env_bool("SADIFY_TC026B_LIVE", default=False),
+        drive_live_enabled=_env_bool("SADIFY_DRIVE_LIVE_ENABLED", default=False),
     )
 
 
