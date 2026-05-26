@@ -112,6 +112,70 @@ def test_find_or_create_folder_creates_when_missing():
     assert create_call["body"]["name"] == "SADify Projects"
 
 
+def test_find_or_create_folder_searches_inside_parent_when_parent_id_given():
+    service = _drive_service()
+    service.files.return_value.list.return_value.execute.return_value = {
+        "files": [{"id": "wiki-folder-001", "name": "Wiki"}]
+    }
+
+    with patch("sadify_api.services.drive_client.build", return_value=service):
+        folder = DriveClient(
+            client_id="client-id",
+            client_secret="client-secret",
+        ).find_or_create_folder(
+            "access-token",
+            "Wiki",
+            parent_folder_id="project-root-001",
+        )
+
+    assert folder.folder_id == "wiki-folder-001"
+    list_call = service.files.return_value.list.call_args.kwargs
+    assert "'project-root-001' in parents" in list_call["q"]
+
+
+def test_find_or_create_folder_creates_inside_parent_when_missing():
+    service = _drive_service()
+    service.files.return_value.list.return_value.execute.return_value = {"files": []}
+    service.files.return_value.create.return_value.execute.return_value = {
+        "id": "wiki-folder-001",
+        "name": "Wiki",
+    }
+
+    with patch("sadify_api.services.drive_client.build", return_value=service):
+        folder = DriveClient(
+            client_id="client-id",
+            client_secret="client-secret",
+        ).find_or_create_folder(
+            "access-token",
+            "Wiki",
+            parent_folder_id="project-root-001",
+        )
+
+    assert folder.folder_id == "wiki-folder-001"
+    create_call = service.files.return_value.create.call_args.kwargs
+    assert create_call["body"]["parents"] == ["project-root-001"]
+
+
+def test_find_or_create_folder_at_root_unchanged_when_parent_id_omitted():
+    service = _drive_service()
+    service.files.return_value.list.return_value.execute.return_value = {"files": []}
+    service.files.return_value.create.return_value.execute.return_value = {
+        "id": "folder-456",
+        "name": "SADify Projects",
+    }
+
+    with patch("sadify_api.services.drive_client.build", return_value=service):
+        DriveClient(
+            client_id="client-id",
+            client_secret="client-secret",
+        ).find_or_create_folder("access-token", "SADify Projects")
+
+    list_call = service.files.return_value.list.call_args.kwargs
+    create_call = service.files.return_value.create.call_args.kwargs
+    assert "in parents" not in list_call["q"]
+    assert "parents" not in create_call["body"]
+
+
 def test_find_or_create_folder_surfaces_create_failure():
     service = _drive_service()
     service.files.return_value.list.return_value.execute.return_value = {"files": []}

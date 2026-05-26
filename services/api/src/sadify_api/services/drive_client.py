@@ -109,14 +109,22 @@ class DriveClient:
             raise DriveTokenInvalidError("Could not refresh Drive access token.") from exc
         return credentials.token
 
-    def find_or_create_folder(self, access_token: str, folder_name: str) -> DriveFolder:
+    def find_or_create_folder(
+        self,
+        access_token: str,
+        folder_name: str,
+        parent_folder_id: str | None = None,
+    ) -> DriveFolder:
         service = self._drive_service(access_token)
-        query = (
-            "mimeType='application/vnd.google-apps.folder' "
-            f"and name='{folder_name}' and trashed=false"
-        )
+        query_parts = [
+            "mimeType='application/vnd.google-apps.folder'",
+            f"name='{_escape_drive_query(folder_name)}'",
+            "trashed=false",
+        ]
+        if parent_folder_id:
+            query_parts.append(f"'{_escape_drive_query(parent_folder_id)}' in parents")
         search = service.files().list(
-            q=query,
+            q=" and ".join(query_parts),
             spaces="drive",
             fields="files(id,name)",
         ).execute()
@@ -129,11 +137,14 @@ class DriveClient:
             )
 
         try:
+            body = {
+                "name": folder_name,
+                "mimeType": "application/vnd.google-apps.folder",
+            }
+            if parent_folder_id:
+                body["parents"] = [parent_folder_id]
             created = service.files().create(
-                body={
-                    "name": folder_name,
-                    "mimeType": "application/vnd.google-apps.folder",
-                },
+                body=body,
                 fields="id,name",
             ).execute()
         except Exception as exc:

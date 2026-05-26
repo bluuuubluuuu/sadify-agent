@@ -26,6 +26,7 @@ from sadify_api.schemas import (
 from sadify_api.services.auth import TokenVerifier
 from sadify_api.services.drive_client import (
     DriveClient,
+    DriveFolderCreateError,
     DriveTextFileError,
     DriveTokenInvalidError,
 )
@@ -277,9 +278,14 @@ def create_sad_router(
             secret_store=secret_store,
         )
         try:
+            wiki_folder = context.drive_client.find_or_create_folder(
+                access_token=context.access_token,
+                folder_name="Wiki",
+                parent_folder_id=context.repo.repo_folder_id,
+            )
             remote_file = context.drive_client.find_file_in_folder(
                 access_token=context.access_token,
-                folder_id=context.repo.repo_folder_id,
+                folder_id=wiki_folder.folder_id,
                 name=WIKI_FILE_NAME,
                 mime_type=WIKI_MIME_TYPE,
             )
@@ -291,7 +297,7 @@ def create_sad_router(
                     file_id=remote_file.file_id,
                 )
                 remote_hash = _wiki_hash(remote_markdown)
-        except DriveTextFileError as exc:
+        except (DriveFolderCreateError, DriveTextFileError) as exc:
             raise _wiki_error(
                 502,
                 "WIKI_REMOTE_READ_FAILED",
@@ -327,9 +333,14 @@ def create_sad_router(
             secret_store=secret_store,
         )
         try:
+            wiki_folder = context.drive_client.find_or_create_folder(
+                access_token=context.access_token,
+                folder_name="Wiki",
+                parent_folder_id=context.repo.repo_folder_id,
+            )
             remote_file = context.drive_client.find_file_in_folder(
                 access_token=context.access_token,
-                folder_id=context.repo.repo_folder_id,
+                folder_id=wiki_folder.folder_id,
                 name=WIKI_FILE_NAME,
                 mime_type=WIKI_MIME_TYPE,
             )
@@ -340,7 +351,7 @@ def create_sad_router(
                     file_id=remote_file.file_id,
                 )
                 remote_hash = _wiki_hash(remote_markdown)
-        except DriveTextFileError as exc:
+        except (DriveFolderCreateError, DriveTextFileError) as exc:
             raise _wiki_error(
                 502,
                 "WIKI_REMOTE_READ_FAILED",
@@ -363,13 +374,13 @@ def create_sad_router(
         try:
             upload = context.drive_client.upload_or_replace_text_file(
                 access_token=context.access_token,
-                folder_id=context.repo.repo_folder_id,
+                folder_id=wiki_folder.folder_id,
                 name=WIKI_FILE_NAME,
                 mime_type=WIKI_MIME_TYPE,
                 content=proposed_markdown,
                 existing_file_id=remote_file.file_id if remote_file else None,
             )
-        except DriveTextFileError as exc:
+        except (DriveFolderCreateError, DriveTextFileError) as exc:
             raise _wiki_error(
                 502,
                 "WIKI_WRITE_FAILED",

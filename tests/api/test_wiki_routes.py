@@ -232,6 +232,40 @@ def test_wiki_update_surfaces_drive_write_failure_as_502():
     assert response.json()["detail"]["code"] == "WIKI_WRITE_FAILED"
 
 
+def test_wiki_update_writes_into_wiki_subfolder_under_project_root():
+    client, _drive, _save, _wiki, fake_drive = _client_with_saved_sad()
+    fake_drive.remote_text = None
+
+    response = client.post(
+        "/sad/wiki/update",
+        headers=_auth_header(),
+        json={"expected_remote_hash": None, "force_overwrite": False},
+    )
+
+    assert response.status_code == 200
+    assert fake_drive.folder_lookups[-1] == {
+        "folder_name": "Wiki",
+        "parent_folder_id": "drive-folder-001",
+    }
+    assert fake_drive.upload_folder_id == "wiki-folder-001"
+    assert fake_drive.upload_folder_id != "drive-folder-001"
+
+
+def test_wiki_preview_reads_from_wiki_subfolder_not_project_root():
+    client, _drive, _save, _wiki, fake_drive = _client_with_saved_sad()
+    fake_drive.remote_text = "# Existing Wiki"
+
+    response = client.post("/sad/wiki/preview", headers=_auth_header(), json={})
+
+    assert response.status_code == 200
+    assert fake_drive.folder_lookups[-1] == {
+        "folder_name": "Wiki",
+        "parent_folder_id": "drive-folder-001",
+    }
+    assert fake_drive.find_file_folder_id == "wiki-folder-001"
+    assert fake_drive.find_file_folder_id != "drive-folder-001"
+
+
 def _client_with_saved_sad(**kwargs):
     client, drive_repo, save_repo, wiki_state, fake_drive = _client(**kwargs)
     _connect_repo(client)
@@ -327,6 +361,9 @@ class FakeDriveClient:
         self.uploaded_content: str | None = None
         self.replaced_file_id: str | None = None
         self.write_error: Exception | None = None
+        self.folder_lookups: list[dict[str, str | None]] = []
+        self.find_file_folder_id: str | None = None
+        self.upload_folder_id: str | None = None
 
     def exchange_authorization_code(self, code: str, redirect_uri: str) -> DriveTokens:
         return DriveTokens(
@@ -335,7 +372,20 @@ class FakeDriveClient:
             expiry=datetime(2026, 5, 26, 10, 0, tzinfo=UTC),
         )
 
-    def find_or_create_folder(self, access_token: str, folder_name: str) -> DriveFolder:
+    def find_or_create_folder(
+        self,
+        access_token: str,
+        folder_name: str,
+        parent_folder_id: str | None = None,
+    ) -> DriveFolder:
+        self.folder_lookups.append(
+            {
+                "folder_name": folder_name,
+                "parent_folder_id": parent_folder_id,
+            }
+        )
+        if parent_folder_id:
+            return DriveFolder(folder_id="wiki-folder-001", name=folder_name)
         return DriveFolder(folder_id="drive-folder-001", name=folder_name)
 
     def refresh_access_token(self, refresh_token: str) -> str:
@@ -349,6 +399,7 @@ class FakeDriveClient:
         name: str,
         mime_type: str | None = None,
     ) -> DriveFileRef | None:
+        self.find_file_folder_id = folder_id
         if self.remote_text is None:
             return None
         return DriveFileRef(
@@ -376,6 +427,7 @@ class FakeDriveClient:
     ) -> DriveUploadResult:
         if self.write_error:
             raise self.write_error
+        self.upload_folder_id = folder_id
         self.uploaded_content = content
         self.replaced_file_id = existing_file_id
         self.remote_text = content
