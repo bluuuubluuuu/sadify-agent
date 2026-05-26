@@ -2,13 +2,19 @@
 
 import { useEffect, useState } from "react";
 import {
+  commitWikiUpdate,
   generateSadPreview,
+  previewWikiUpdate,
   saveSadPreview,
   type RequirementAnalysisApiResponse,
   type SadPreviewApiResponse,
   type SadSaveApiResponse,
+  type WikiPreviewResponse,
+  type WikiUpdateResponse,
 } from "../lib/api";
 import { getFirebaseAuth } from "../lib/firebaseClient";
+import { isGoogleOAuthConfigured } from "../lib/googleOAuth";
+import { WikiUpdateDialog } from "./WikiUpdateDialog";
 
 type Props = {
   analysisResponse: RequirementAnalysisApiResponse | null;
@@ -36,18 +42,29 @@ export function SadPreviewPanel({
   const [previewResponse, setPreviewResponse] =
     useState<SadPreviewApiResponse | null>(null);
   const [saveResponse, setSaveResponse] = useState<SadSaveApiResponse | null>(null);
+  const [wikiPreviewResponse, setWikiPreviewResponse] =
+    useState<WikiPreviewResponse | null>(null);
+  const [wikiUpdateResponse, setWikiUpdateResponse] =
+    useState<WikiUpdateResponse | null>(null);
+  const [wikiDialogOpen, setWikiDialogOpen] = useState(false);
   const [message, setMessage] = useState(
     "Temporary preview only. No Google Doc or Drive file is saved here.",
   );
   const [saveMessage, setSaveMessage] = useState("");
+  const [wikiMessage, setWikiMessage] = useState("");
   const [isBusy, setIsBusy] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [isWikiBusy, setIsWikiBusy] = useState(false);
   const analysisId = analysisResponse?.analysis_id;
 
   useEffect(() => {
     setPreviewResponse(null);
     setSaveResponse(null);
+    setWikiPreviewResponse(null);
+    setWikiUpdateResponse(null);
+    setWikiDialogOpen(false);
     setSaveMessage("");
+    setWikiMessage("");
     setMessage("Temporary preview only. No Google Doc or Drive file is saved here.");
   }, [analysisId, requirementText]);
 
@@ -69,7 +86,11 @@ export function SadPreviewPanel({
       });
       setPreviewResponse(response);
       setSaveResponse(null);
+      setWikiPreviewResponse(null);
+      setWikiUpdateResponse(null);
+      setWikiDialogOpen(false);
       setSaveMessage("");
+      setWikiMessage("");
       onPreviewSaved(response);
       setMessage(`Temporary preview ${response.preview_id} saved in backend state.`);
     } catch (error) {
@@ -100,6 +121,10 @@ export function SadPreviewPanel({
       const idToken = await user.getIdToken();
       const response = await saveSadPreview(previewResponse.preview_id, idToken);
       setSaveResponse(response);
+      setWikiPreviewResponse(null);
+      setWikiUpdateResponse(null);
+      setWikiDialogOpen(false);
+      setWikiMessage("");
       onSadSaved(response);
       setSaveMessage("Saved to project repo.");
     } catch (error) {
@@ -113,8 +138,78 @@ export function SadPreviewPanel({
     }
   }
 
+  async function prepareWikiUpdate() {
+    if (!saveResponse) {
+      setWikiMessage("Save the SAD preview before updating the wiki.");
+      return;
+    }
+    const user = getFirebaseAuth().currentUser;
+    if (!user) {
+      setWikiMessage("Sign in before updating the wiki.");
+      return;
+    }
+
+    setIsWikiBusy(true);
+    setWikiMessage("Checking the current Drive wiki...");
+    try {
+      const idToken = await user.getIdToken();
+      const response = await previewWikiUpdate(idToken);
+      setWikiPreviewResponse(response);
+      if (response.requires_confirmation) {
+        setWikiDialogOpen(true);
+        setWikiMessage("Review the Drive wiki changes before overwriting.");
+        return;
+      }
+      const update = await commitWikiUpdate(idToken, response.remote_hash, false);
+      setWikiUpdateResponse(update);
+      setWikiDialogOpen(false);
+      setWikiMessage("Wiki updated.");
+    } catch (error) {
+      setWikiMessage(
+        error instanceof Error ? error.message : "SADify could not update the wiki yet.",
+      );
+    } finally {
+      setIsWikiBusy(false);
+    }
+  }
+
+  async function confirmWikiUpdate(forceOverwrite: boolean) {
+    if (!wikiPreviewResponse) {
+      setWikiDialogOpen(false);
+      setWikiMessage("Prepare the wiki update again before confirming.");
+      return;
+    }
+    const user = getFirebaseAuth().currentUser;
+    if (!user) {
+      setWikiMessage("Sign in before updating the wiki.");
+      return;
+    }
+
+    setIsWikiBusy(true);
+    setWikiMessage("Updating Wiki/Wiki.md...");
+    try {
+      const idToken = await user.getIdToken();
+      const update = await commitWikiUpdate(
+        idToken,
+        wikiPreviewResponse.remote_hash,
+        forceOverwrite,
+      );
+      setWikiUpdateResponse(update);
+      setWikiDialogOpen(false);
+      setWikiMessage("Wiki updated.");
+    } catch (error) {
+      setWikiMessage(
+        error instanceof Error ? error.message : "SADify could not update the wiki yet.",
+      );
+    } finally {
+      setIsWikiBusy(false);
+    }
+  }
+
   const preview = previewResponse?.preview;
   const record = saveResponse?.record;
+  const wikiRecord = wikiUpdateResponse;
+  const canUpdateWiki = saveResponse && isGoogleOAuthConfigured();
   const visibleTrackingPaths =
     preview?.change_tracking.paths.filter(
       (path) => !path.startsWith("_SADify/"),
@@ -150,6 +245,17 @@ export function SadPreviewPanel({
         </button>
       ) : null}
 
+      {canUpdateWiki ? (
+        <button
+          type="button"
+          className="secondary-button"
+          disabled={isWikiBusy}
+          onClick={prepareWikiUpdate}
+        >
+          Update wiki
+        </button>
+      ) : null}
+
       {!analysisResponse ? (
         <small className="sad-preview-note">
           Start analysis before creating a temporary preview.
@@ -158,6 +264,10 @@ export function SadPreviewPanel({
 
       {saveMessage ? (
         <small className="sad-preview-note">{saveMessage}</small>
+      ) : null}
+
+      {wikiMessage ? (
+        <small className="sad-preview-note">{wikiMessage}</small>
       ) : null}
 
       {preview ? (
@@ -192,6 +302,16 @@ export function SadPreviewPanel({
                 <a href={record.sad_doc.url}>{record.sad_doc.url}</a>
               ) : null}
               <p>{record.change_summary}</p>
+            </div>
+          ) : null}
+
+          {wikiRecord ? (
+            <div className="sad-save-result">
+              <p className="eyebrow">Wiki updated</p>
+              <strong>{wikiRecord.wiki_path}</strong>
+              <p>{wikiRecord.created_new_file ? "Created" : "Updated"}</p>
+              <a href={wikiRecord.wiki_url}>{wikiRecord.wiki_url}</a>
+              <p>{wikiRecord.wiki_hash}</p>
             </div>
           ) : null}
 
@@ -256,6 +376,18 @@ export function SadPreviewPanel({
             </details>
           </div>
         </div>
+      ) : null}
+
+      {wikiDialogOpen && wikiPreviewResponse ? (
+        <WikiUpdateDialog
+          preview={wikiPreviewResponse}
+          isBusy={isWikiBusy}
+          onConfirm={confirmWikiUpdate}
+          onCancel={() => {
+            setWikiDialogOpen(false);
+            setWikiMessage("Wiki update canceled.");
+          }}
+        />
       ) : null}
     </section>
   );

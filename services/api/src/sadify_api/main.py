@@ -25,6 +25,10 @@ from sadify_api.services.drive_client import DriveClient
 from sadify_api.services.sad_preview import SadPreviewRepository
 from sadify_api.services.sad_save import SadSaveRepository
 from sadify_api.services.secret_store import SecretStore
+from sadify_api.services.wiki_state import (
+    WikiStateRepository,
+    get_wiki_state_repository,
+)
 
 
 def create_app(
@@ -40,6 +44,7 @@ def create_app(
     sad_save_repository: SadSaveRepository | None = None,
     drive_client: DriveClient | None = None,
     secret_store: SecretStore | None = None,
+    wiki_state_repository: WikiStateRepository | None = None,
 ) -> FastAPI:
     config = config or load_api_config()
     token_verifier = token_verifier or FirebaseAdminTokenVerifier(config)
@@ -51,6 +56,7 @@ def create_app(
     sad_preview_model = sad_preview_model or GeminiSadPreviewModel(config)
     sad_preview_repository = sad_preview_repository or SadPreviewRepository()
     sad_save_repository = sad_save_repository or SadSaveRepository()
+    wiki_state_repository = wiki_state_repository or get_wiki_state_repository()
     app = FastAPI(title="SADify API", version="0.1.0")
     app.add_middleware(
         CORSMiddleware,
@@ -84,6 +90,7 @@ def create_app(
             config,
             drive_client,
             secret_store,
+            wiki_state_repository,
         )
     )
     if config.diagnostics_enabled:

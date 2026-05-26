@@ -12,7 +12,7 @@ from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import Flow
 from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseUpload
+from googleapiclient.http import MediaInMemoryUpload, MediaIoBaseUpload
 
 
 TOKEN_URI = "https://oauth2.googleapis.com/token"
@@ -35,6 +35,10 @@ class DriveUploadError(Exception):
     pass
 
 
+class DriveTextFileError(Exception):
+    pass
+
+
 @dataclass(frozen=True)
 class DriveTokens:
     access_token: str
@@ -52,6 +56,15 @@ class DriveFolder:
 class DriveUploadResult:
     file_id: str
     web_view_link: str
+
+
+@dataclass(frozen=True)
+class DriveFileRef:
+    file_id: str
+    name: str
+    mime_type: str | None
+    web_view_link: str | None
+    md5_checksum: str | None
 
 
 class DriveClient:
@@ -163,6 +176,94 @@ class DriveClient:
             web_view_link=created["webViewLink"],
         )
 
+    def find_file_in_folder(
+        self,
+        *,
+        access_token: str,
+        folder_id: str,
+        name: str,
+        mime_type: str | None = None,
+    ) -> DriveFileRef | None:
+        service = self._drive_service(access_token)
+        query_parts = [
+            f"'{_escape_drive_query(folder_id)}' in parents",
+            f"name='{_escape_drive_query(name)}'",
+            "trashed=false",
+        ]
+        if mime_type:
+            query_parts.append(f"mimeType='{_escape_drive_query(mime_type)}'")
+        try:
+            result = service.files().list(
+                q=" and ".join(query_parts),
+                spaces="drive",
+                fields="files(id,name,mimeType,webViewLink,md5Checksum)",
+            ).execute()
+        except Exception as exc:
+            raise DriveTextFileError("Could not find Drive text file.") from exc
+
+        files = result.get("files", [])
+        if not files:
+            return None
+        item = files[0]
+        return DriveFileRef(
+            file_id=item["id"],
+            name=item.get("name", name),
+            mime_type=item.get("mimeType"),
+            web_view_link=item.get("webViewLink"),
+            md5_checksum=item.get("md5Checksum"),
+        )
+
+    def download_text_file(self, *, access_token: str, file_id: str) -> str:
+        service = self._drive_service(access_token)
+        try:
+            raw = service.files().get_media(fileId=file_id).execute()
+        except Exception as exc:
+            raise DriveTextFileError("Could not download Drive text file.") from exc
+        if isinstance(raw, str):
+            return raw
+        return raw.decode("utf-8")
+
+    def upload_or_replace_text_file(
+        self,
+        *,
+        access_token: str,
+        folder_id: str,
+        name: str,
+        mime_type: str,
+        content: str,
+        existing_file_id: str | None = None,
+    ) -> DriveUploadResult:
+        service = self._drive_service(access_token)
+        media = MediaInMemoryUpload(
+            content.encode("utf-8"),
+            mimetype=mime_type,
+            resumable=False,
+        )
+        body = {"name": name, "mimeType": mime_type}
+        try:
+            if existing_file_id:
+                result = service.files().update(
+                    fileId=existing_file_id,
+                    body=body,
+                    media_body=media,
+                    fields="id,webViewLink",
+                ).execute()
+            else:
+                result = service.files().create(
+                    body={
+                        **body,
+                        "parents": [folder_id],
+                    },
+                    media_body=media,
+                    fields="id,webViewLink",
+                ).execute()
+        except Exception as exc:
+            raise DriveTextFileError("Could not upload Drive text file.") from exc
+        return DriveUploadResult(
+            file_id=result["id"],
+            web_view_link=result["webViewLink"],
+        )
+
     def _drive_service(self, access_token: str):
         credentials = Credentials(token=access_token)
         return build("drive", "v3", credentials=credentials, cache_discovery=False)
@@ -177,3 +278,7 @@ def _client_config(client_id: str, client_secret: str) -> dict[str, dict[str, ob
             "token_uri": TOKEN_URI,
         }
     }
+
+
+def _escape_drive_query(value: str) -> str:
+    return value.replace("\\", "\\\\").replace("'", "\\'")

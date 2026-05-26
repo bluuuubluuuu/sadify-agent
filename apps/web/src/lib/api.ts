@@ -207,6 +207,24 @@ export type SadSaveApiResponse = {
   message: string;
 };
 
+export type WikiPreviewResponse = {
+  proposed_markdown: string;
+  remote_hash: string | null;
+  last_known_hash: string | null;
+  requires_confirmation: boolean;
+  remote_exists: boolean;
+  remote_markdown: string | null;
+};
+
+export type WikiUpdateResponse = {
+  wiki_path: string;
+  wiki_url: string;
+  wiki_file_id: string;
+  wiki_hash: string;
+  updated_at: string;
+  created_new_file: boolean;
+};
+
 export type TraceabilityUnit = {
   unit_type: string;
   unit_name: string | null;
@@ -435,6 +453,53 @@ export async function saveSadPreview(
   if (!response.ok) {
     throw new Error(
       await readBackendError(response, "SADify could not save this SAD preview yet."),
+    );
+  }
+
+  return response.json();
+}
+
+export async function previewWikiUpdate(
+  idToken: string,
+): Promise<WikiPreviewResponse> {
+  const response = await fetch(`${baseUrl}/sad/wiki/preview`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${idToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({}),
+  });
+
+  if (!response.ok) {
+    throw new Error(
+      await readBackendError(response, "SADify could not prepare the wiki update yet."),
+    );
+  }
+
+  return response.json();
+}
+
+export async function commitWikiUpdate(
+  idToken: string,
+  expectedRemoteHash: string | null,
+  forceOverwrite: boolean,
+): Promise<WikiUpdateResponse> {
+  const response = await fetch(`${baseUrl}/sad/wiki/update`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${idToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      expected_remote_hash: expectedRemoteHash,
+      force_overwrite: forceOverwrite,
+    }),
+  });
+
+  if (!response.ok) {
+    throw new Error(
+      await readBackendError(response, "SADify could not update the wiki yet."),
     );
   }
 

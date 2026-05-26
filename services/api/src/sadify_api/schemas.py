@@ -357,6 +357,33 @@ class SadSaveApiResponse(ApiModel):
     message: str
 
 
+class WikiPreviewRequest(ApiModel):
+    pass
+
+
+class WikiPreviewResponse(ApiModel):
+    proposed_markdown: str = Field(min_length=1)
+    remote_hash: str | None = None
+    last_known_hash: str | None = None
+    requires_confirmation: bool
+    remote_exists: bool
+    remote_markdown: str | None = None
+
+
+class WikiUpdateRequest(ApiModel):
+    expected_remote_hash: str | None = None
+    force_overwrite: bool = False
+
+
+class WikiUpdateResponse(ApiModel):
+    wiki_path: str = Field(min_length=1)
+    wiki_url: str = Field(min_length=1)
+    wiki_file_id: str = Field(min_length=1)
+    wiki_hash: str = Field(min_length=1)
+    updated_at: datetime
+    created_new_file: bool
+
+
 class TraceabilityUnit(ApiModel):
     unit_type: str = Field(min_length=1)
     unit_name: str | None = None
