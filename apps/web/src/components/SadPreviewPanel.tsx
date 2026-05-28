@@ -31,6 +31,14 @@ const readinessLabel: Record<string, string> = {
   risk: "Risk",
 };
 
+function expectedRemoteHashes(
+  response: WikiPreviewResponse,
+): Record<string, string | null> {
+  return Object.fromEntries(
+    response.files.map((file) => [file.name, file.remote_hash]),
+  );
+}
+
 export function SadPreviewPanel({
   analysisResponse,
   requirementText,
@@ -160,7 +168,7 @@ export function SadPreviewPanel({
         setWikiMessage("Review the Drive wiki changes before overwriting.");
         return;
       }
-      const update = await commitWikiUpdate(idToken, response.remote_hash, false);
+      const update = await commitWikiUpdate(idToken, expectedRemoteHashes(response), false);
       setWikiUpdateResponse(update);
       setWikiDialogOpen(false);
       setWikiMessage("Wiki updated.");
@@ -186,12 +194,12 @@ export function SadPreviewPanel({
     }
 
     setIsWikiBusy(true);
-    setWikiMessage("Updating Wiki/Wiki.md...");
+    setWikiMessage("Updating wiki files...");
     try {
       const idToken = await user.getIdToken();
       const update = await commitWikiUpdate(
         idToken,
-        wikiPreviewResponse.remote_hash,
+        expectedRemoteHashes(wikiPreviewResponse),
         forceOverwrite,
       );
       setWikiUpdateResponse(update);
@@ -308,10 +316,22 @@ export function SadPreviewPanel({
           {wikiRecord ? (
             <div className="sad-save-result">
               <p className="eyebrow">Wiki updated</p>
-              <strong>{wikiRecord.wiki_path}</strong>
-              <p>{wikiRecord.created_new_file ? "Created" : "Updated"}</p>
-              <a href={wikiRecord.wiki_url}>{wikiRecord.wiki_url}</a>
-              <p>{wikiRecord.wiki_hash}</p>
+              <strong>{wikiRecord.files.length} wiki files written</strong>
+              <ul>
+                {wikiRecord.files.map((file) => (
+                  <li key={file.relative_path}>
+                    <span>{file.relative_path}</span>
+                    <small>{file.created_new_file ? "Created" : "Updated"}</small>
+                    <a href={file.web_view_link}>{file.web_view_link}</a>
+                    <p>{file.hash}</p>
+                  </li>
+                ))}
+              </ul>
+              {wikiRecord.backup.created ? (
+                <p>Backup: {wikiRecord.backup.path}</p>
+              ) : (
+                <p>No backup needed.</p>
+              )}
             </div>
           ) : null}
 

@@ -207,22 +207,55 @@ export type SadSaveApiResponse = {
   message: string;
 };
 
-export type WikiPreviewResponse = {
+export type WikiFileCategory =
+  | "index"
+  | "requirements"
+  | "actors"
+  | "workflows"
+  | "entities"
+  | "decisions"
+  | "reports"
+  | "sources";
+
+export type WikiFilePreview = {
+  relative_path: string;
+  name: string;
+  category: WikiFileCategory;
   proposed_markdown: string;
   remote_hash: string | null;
   last_known_hash: string | null;
-  requires_confirmation: boolean;
   remote_exists: boolean;
+  requires_confirmation: boolean;
   remote_markdown: string | null;
 };
 
-export type WikiUpdateResponse = {
-  wiki_path: string;
-  wiki_url: string;
-  wiki_file_id: string;
-  wiki_hash: string;
-  updated_at: string;
+export type WikiFileResult = {
+  relative_path: string;
+  name: string;
+  category: WikiFileCategory;
+  file_id: string;
+  web_view_link: string;
+  hash: string;
   created_new_file: boolean;
+};
+
+export type WikiBackupInfo = {
+  created: boolean;
+  path: string;
+  file_count: number;
+};
+
+export type WikiPreviewResponse = {
+  files: WikiFilePreview[];
+  requires_confirmation: boolean;
+  changed_files: string[];
+  first_time_write: boolean;
+};
+
+export type WikiUpdateResponse = {
+  files: WikiFileResult[];
+  backup: WikiBackupInfo;
+  updated_at: string;
 };
 
 export type TraceabilityUnit = {
@@ -482,7 +515,7 @@ export async function previewWikiUpdate(
 
 export async function commitWikiUpdate(
   idToken: string,
-  expectedRemoteHash: string | null,
+  expectedRemoteHashes: Record<string, string | null>,
   forceOverwrite: boolean,
 ): Promise<WikiUpdateResponse> {
   const response = await fetch(`${baseUrl}/sad/wiki/update`, {
@@ -492,7 +525,7 @@ export async function commitWikiUpdate(
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      expected_remote_hash: expectedRemoteHash,
+      expected_remote_hashes: expectedRemoteHashes,
       force_overwrite: forceOverwrite,
     }),
   });

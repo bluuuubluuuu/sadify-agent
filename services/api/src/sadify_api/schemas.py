@@ -361,27 +361,62 @@ class WikiPreviewRequest(ApiModel):
     pass
 
 
-class WikiPreviewResponse(ApiModel):
+WikiFileCategory = Literal[
+    "index",
+    "requirements",
+    "actors",
+    "workflows",
+    "entities",
+    "decisions",
+    "reports",
+    "sources",
+]
+
+
+class WikiFilePreview(ApiModel):
+    relative_path: str = Field(min_length=1)
+    name: str = Field(min_length=1)
+    category: WikiFileCategory
     proposed_markdown: str = Field(min_length=1)
     remote_hash: str | None = None
     last_known_hash: str | None = None
-    requires_confirmation: bool
     remote_exists: bool
+    requires_confirmation: bool
     remote_markdown: str | None = None
 
 
+class WikiFileResult(ApiModel):
+    relative_path: str = Field(min_length=1)
+    name: str = Field(min_length=1)
+    category: WikiFileCategory
+    file_id: str = Field(min_length=1)
+    web_view_link: str = Field(min_length=1)
+    hash: str = Field(min_length=1)
+    created_new_file: bool
+
+
+class WikiBackupInfo(ApiModel):
+    created: bool
+    path: str
+    file_count: int
+
+
+class WikiPreviewResponse(ApiModel):
+    files: list[WikiFilePreview]
+    requires_confirmation: bool
+    changed_files: list[str]
+    first_time_write: bool
+
+
 class WikiUpdateRequest(ApiModel):
-    expected_remote_hash: str | None = None
+    expected_remote_hashes: dict[str, str | None] = Field(default_factory=dict)
     force_overwrite: bool = False
 
 
 class WikiUpdateResponse(ApiModel):
-    wiki_path: str = Field(min_length=1)
-    wiki_url: str = Field(min_length=1)
-    wiki_file_id: str = Field(min_length=1)
-    wiki_hash: str = Field(min_length=1)
+    files: list[WikiFileResult]
+    backup: WikiBackupInfo
     updated_at: datetime
-    created_new_file: bool
 
 
 class TraceabilityUnit(ApiModel):

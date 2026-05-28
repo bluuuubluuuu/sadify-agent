@@ -13,11 +13,15 @@ from sadify_api.routes.auth import verify_authorization_header
 from sadify_api.schemas import (
     SadPreviewApiResponse,
     SadPreviewRequest,
+    SadPreviewResponse,
     SadSaveApiResponse,
     SadSaveRequest,
     DriveRepoRecord,
     SadSaveRecord,
     SourceRecord,
+    WikiBackupInfo,
+    WikiFilePreview,
+    WikiFileResult,
     WikiPreviewRequest,
     WikiPreviewResponse,
     WikiUpdateRequest,
@@ -26,6 +30,7 @@ from sadify_api.schemas import (
 from sadify_api.services.auth import TokenVerifier
 from sadify_api.services.drive_client import (
     DriveClient,
+    DriveFileRef,
     DriveFolderCreateError,
     DriveTextFileError,
     DriveTokenInvalidError,
@@ -49,14 +54,17 @@ from sadify_api.services.sad_save import (
     SadSaveTokenInvalidError,
     SadSaveTokenMissingError,
 )
-from sadify_api.services.wiki_compose import compose_wiki_markdown
-from sadify_api.services.wiki_state import WikiStateRepository
+from sadify_api.services.wiki_backup import (
+    WikiBackupError,
+    snapshot_existing_wiki_files,
+)
+from sadify_api.services.wiki_compose import MANAGED_WIKI_FILE_NAMES, compose_wiki_files
+from sadify_api.services.wiki_state import WikiState, WikiStateRepository
 from sadify_api.services.secret_store import SecretStore, get_secret_store
 from sadify_api.services.source_uploads import SourceRepository
 
-WIKI_FILE_NAME = "Wiki.md"
+WIKI_FOLDER_NAME = "Wiki"
 WIKI_MIME_TYPE = "text/markdown"
-WIKI_PATH = "Wiki/Wiki.md"
 
 
 def create_sad_router(
@@ -278,43 +286,52 @@ def create_sad_router(
             secret_store=secret_store,
         )
         try:
-            wiki_folder = context.drive_client.find_or_create_folder(
-                access_token=context.access_token,
-                folder_name="Wiki",
-                parent_folder_id=context.repo.repo_folder_id,
-            )
-            remote_file = context.drive_client.find_file_in_folder(
-                access_token=context.access_token,
-                folder_id=wiki_folder.folder_id,
-                name=WIKI_FILE_NAME,
-                mime_type=WIKI_MIME_TYPE,
-            )
-            remote_markdown = None
-            remote_hash = None
-            if remote_file is not None:
-                remote_markdown = context.drive_client.download_text_file(
-                    access_token=context.access_token,
-                    file_id=remote_file.file_id,
-                )
-                remote_hash = _wiki_hash(remote_markdown)
+            wiki_folder = _wiki_folder(context)
+            remote_files = _read_remote_wiki_files(context, wiki_folder.folder_id)
         except (DriveFolderCreateError, DriveTextFileError) as exc:
             raise _wiki_error(
                 502,
                 "WIKI_REMOTE_READ_FAILED",
-                "Could not read the existing wiki file.",
+                "Could not read the existing wiki files.",
             ) from exc
 
-        state = wiki_state_repository.get_state(context.repo.grant_id)
-        last_known_hash = state.hash if state is not None else None
-        remote_exists = remote_file is not None
-        requires_confirmation = remote_exists and remote_hash != last_known_hash
+        latest_preview = _latest_preview_or_error(
+            repository,
+            context.latest_save.preview_id,
+        )
+        drafts = _compose_wiki(context, latest_preview.preview)
+        files: list[WikiFilePreview] = []
+        changed_files: list[str] = []
+        for draft in drafts:
+            remote = remote_files.get(draft.name)
+            state = wiki_state_repository.get_file_state(
+                context.repo.grant_id,
+                draft.name,
+            )
+            last_known_hash = state.hash if state is not None else None
+            requires_confirmation = (
+                remote is not None and remote["hash"] != last_known_hash
+            )
+            if requires_confirmation:
+                changed_files.append(draft.name)
+            files.append(
+                WikiFilePreview(
+                    relative_path=_wiki_relative_path(draft.name),
+                    name=draft.name,
+                    category=draft.category,
+                    proposed_markdown=draft.markdown,
+                    remote_hash=remote["hash"] if remote is not None else None,
+                    last_known_hash=last_known_hash,
+                    remote_exists=remote is not None,
+                    requires_confirmation=requires_confirmation,
+                    remote_markdown=remote["markdown"] if requires_confirmation else None,
+                )
+            )
         return WikiPreviewResponse(
-            proposed_markdown=_compose_wiki(context),
-            remote_hash=remote_hash,
-            last_known_hash=last_known_hash,
-            requires_confirmation=requires_confirmation,
-            remote_exists=remote_exists,
-            remote_markdown=remote_markdown if requires_confirmation else None,
+            files=files,
+            requires_confirmation=bool(changed_files),
+            changed_files=changed_files,
+            first_time_write=not remote_files,
         )
 
     @router.post("/wiki/update", response_model=WikiUpdateResponse)
@@ -333,53 +350,82 @@ def create_sad_router(
             secret_store=secret_store,
         )
         try:
-            wiki_folder = context.drive_client.find_or_create_folder(
-                access_token=context.access_token,
-                folder_name="Wiki",
-                parent_folder_id=context.repo.repo_folder_id,
-            )
-            remote_file = context.drive_client.find_file_in_folder(
-                access_token=context.access_token,
-                folder_id=wiki_folder.folder_id,
-                name=WIKI_FILE_NAME,
-                mime_type=WIKI_MIME_TYPE,
-            )
-            remote_hash = None
-            if remote_file is not None:
-                remote_markdown = context.drive_client.download_text_file(
-                    access_token=context.access_token,
-                    file_id=remote_file.file_id,
-                )
-                remote_hash = _wiki_hash(remote_markdown)
+            wiki_folder = _wiki_folder(context)
+            remote_files = _read_remote_wiki_files(context, wiki_folder.folder_id)
         except (DriveFolderCreateError, DriveTextFileError) as exc:
             raise _wiki_error(
                 502,
                 "WIKI_REMOTE_READ_FAILED",
-                "Could not read the existing wiki file.",
+                "Could not read the existing wiki files.",
             ) from exc
 
-        if (
-            remote_file is not None
-            and remote_hash != request.expected_remote_hash
-            and not request.force_overwrite
-        ):
+        changed_files = [
+            name
+            for name, remote in remote_files.items()
+            if remote["hash"] != request.expected_remote_hashes.get(name)
+        ]
+        if changed_files and not request.force_overwrite:
             raise _wiki_error(
                 409,
                 "WIKI_CONFLICT",
                 "The wiki was changed in Drive since SADify last wrote it. Confirm overwrite.",
+                changed_files=changed_files,
             )
 
-        proposed_markdown = _compose_wiki(context)
-        wiki_hash = _wiki_hash(proposed_markdown)
+        latest_preview = _latest_preview_or_error(
+            repository,
+            context.latest_save.preview_id,
+        )
+        drafts = _compose_wiki(context, latest_preview.preview)
+        existing_files = [remote["file"] for remote in remote_files.values()]
         try:
-            upload = context.drive_client.upload_or_replace_text_file(
+            backup = snapshot_existing_wiki_files(
+                drive_client=context.drive_client,
                 access_token=context.access_token,
-                folder_id=wiki_folder.folder_id,
-                name=WIKI_FILE_NAME,
-                mime_type=WIKI_MIME_TYPE,
-                content=proposed_markdown,
-                existing_file_id=remote_file.file_id if remote_file else None,
+                repo_folder_id=context.repo.repo_folder_id,
+                existing_files=existing_files,
             )
+        except WikiBackupError as exc:
+            raise _wiki_error(
+                502,
+                "WIKI_BACKUP_FAILED",
+                "Could not snapshot existing wiki files before overwrite.",
+            ) from exc
+
+        updated_at = datetime.now(UTC)
+        files: list[WikiFileResult] = []
+        try:
+            for draft in drafts:
+                remote = remote_files.get(draft.name)
+                wiki_hash = _wiki_hash(draft.markdown)
+                upload = context.drive_client.upload_or_replace_text_file(
+                    access_token=context.access_token,
+                    folder_id=wiki_folder.folder_id,
+                    name=draft.name,
+                    mime_type=WIKI_MIME_TYPE,
+                    content=draft.markdown,
+                    existing_file_id=remote["file"].file_id if remote else None,
+                )
+                wiki_state_repository.record_file_write(
+                    context.repo.grant_id,
+                    WikiState(
+                        file_name=draft.name,
+                        file_id=upload.file_id,
+                        hash=wiki_hash,
+                        updated_at=updated_at,
+                    ),
+                )
+                files.append(
+                    WikiFileResult(
+                        relative_path=_wiki_relative_path(draft.name),
+                        name=draft.name,
+                        category=draft.category,
+                        file_id=upload.file_id,
+                        web_view_link=upload.web_view_link,
+                        hash=wiki_hash,
+                        created_new_file=remote is None,
+                    )
+                )
         except (DriveFolderCreateError, DriveTextFileError) as exc:
             raise _wiki_error(
                 502,
@@ -387,20 +433,14 @@ def create_sad_router(
                 "Google Drive rejected the wiki update.",
             ) from exc
 
-        updated_at = datetime.now(UTC)
-        wiki_state_repository.record_write(
-            context.repo.grant_id,
-            file_id=upload.file_id,
-            hash_value=wiki_hash,
-            updated_at=updated_at,
-        )
         return WikiUpdateResponse(
-            wiki_path=WIKI_PATH,
-            wiki_url=upload.web_view_link,
-            wiki_file_id=upload.file_id,
-            wiki_hash=wiki_hash,
+            files=files,
+            backup=WikiBackupInfo(
+                created=backup.created,
+                path=backup.path,
+                file_count=backup.file_count,
+            ),
             updated_at=updated_at,
-            created_new_file=remote_file is None,
         )
 
     return router
@@ -571,22 +611,87 @@ def _sources_for_save(
     return sources
 
 
-def _compose_wiki(context: _WikiRouteContext) -> str:
-    return compose_wiki_markdown(
+def _latest_preview_or_error(
+    repository: SadPreviewRepository,
+    preview_id: str,
+):
+    preview_record = repository.get_preview(preview_id)
+    if preview_record is None:
+        raise _wiki_error(
+            409,
+            "WIKI_SAVE_REQUIRED",
+            "The SAD preview must be regenerated before updating the wiki.",
+        )
+    return preview_record
+
+
+def _wiki_folder(context: _WikiRouteContext):
+    return context.drive_client.find_or_create_folder(
+        access_token=context.access_token,
+        folder_name=WIKI_FOLDER_NAME,
+        parent_folder_id=context.repo.repo_folder_id,
+    )
+
+
+def _read_remote_wiki_files(
+    context: _WikiRouteContext,
+    wiki_folder_id: str,
+) -> dict[str, dict[str, object]]:
+    remote_files: dict[str, dict[str, object]] = {}
+    for name in MANAGED_WIKI_FILE_NAMES:
+        remote_file = context.drive_client.find_file_in_folder(
+            access_token=context.access_token,
+            folder_id=wiki_folder_id,
+            name=name,
+            mime_type=WIKI_MIME_TYPE,
+        )
+        if remote_file is None:
+            continue
+        remote_markdown = context.drive_client.download_text_file(
+            access_token=context.access_token,
+            file_id=remote_file.file_id,
+        )
+        remote_files[name] = {
+            "file": remote_file,
+            "markdown": remote_markdown,
+            "hash": _wiki_hash(remote_markdown),
+        }
+    return remote_files
+
+
+def _compose_wiki(
+    context: _WikiRouteContext,
+    latest_preview: SadPreviewResponse,
+):
+    return compose_wiki_files(
         repo=context.repo,
         latest_save=context.latest_save,
+        latest_preview=latest_preview,
         all_saves_for_repo=context.all_saves_for_repo,
         sources=context.sources,
         requirement_text=context.latest_save.manifest.requirement_text,
     )
 
 
+def _wiki_relative_path(name: str) -> str:
+    return f"{WIKI_FOLDER_NAME}/{name}"
+
+
 def _wiki_hash(value: str) -> str:
     return f"sha256:{sha256(value.encode('utf-8')).hexdigest()}"
 
 
-def _wiki_error(status_code: int, code: str, message: str) -> HTTPException:
+def _wiki_error(
+    status_code: int,
+    code: str,
+    message: str,
+    *,
+    changed_files: list[str] | None = None,
+) -> HTTPException:
+    detail = {"code": code, "message": message}
+    if changed_files is not None:
+        detail["changed_files"] = changed_files
     return HTTPException(
         status_code=status_code,
-        detail={"code": code, "message": message},
+        detail=detail,
     )

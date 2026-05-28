@@ -6,6 +6,7 @@ from datetime import datetime
 
 @dataclass(frozen=True)
 class WikiState:
+    file_name: str
     file_id: str
     hash: str
     updated_at: datetime
@@ -13,24 +14,25 @@ class WikiState:
 
 class WikiStateRepository:
     def __init__(self) -> None:
-        self._states: dict[str, WikiState] = {}
+        self._states: dict[tuple[str, str], WikiState] = {}
 
-    def get_state(self, repo_grant_id: str) -> WikiState | None:
-        return self._states.get(repo_grant_id)
+    def get_file_state(self, repo_grant_id: str, file_name: str) -> WikiState | None:
+        return self._states.get((repo_grant_id, file_name))
 
-    def record_write(
-        self,
-        repo_grant_id: str,
-        *,
-        file_id: str,
-        hash_value: str,
-        updated_at: datetime,
-    ) -> None:
-        self._states[repo_grant_id] = WikiState(
-            file_id=file_id,
-            hash=hash_value,
-            updated_at=updated_at,
-        )
+    def get_all_states(self, repo_grant_id: str) -> dict[str, WikiState]:
+        return {
+            file_name: state
+            for (grant_id, file_name), state in self._states.items()
+            if grant_id == repo_grant_id
+        }
+
+    def record_file_write(self, repo_grant_id: str, state: WikiState) -> None:
+        self._states[(repo_grant_id, state.file_name)] = state
+
+    def clear_states_for_repo(self, repo_grant_id: str) -> None:
+        for key in list(self._states):
+            if key[0] == repo_grant_id:
+                del self._states[key]
 
 
 _wiki_state_repository = WikiStateRepository()
