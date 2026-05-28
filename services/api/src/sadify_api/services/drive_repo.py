@@ -4,6 +4,7 @@ from sadify_api.schemas import (
     DriveRepoConnectRequest,
     DriveRepoFolder,
     DriveRepoRecord,
+    ProjectSummary,
 )
 from sadify_api.services.drive_client import (
     DRIVE_FILE_SCOPE,
@@ -201,3 +202,57 @@ class DriveRepoRepository:
         if not owned_records:
             return None
         return max(owned_records, key=lambda record: record.updated_at)
+
+    def set_active_project(
+        self,
+        *,
+        grant_id: str,
+        project: ProjectSummary,
+        updated_at: datetime | None = None,
+    ) -> DriveRepoRecord:
+        record = self._records[grant_id]
+        projects = _replace_project(record.available_projects, project)
+        updated = record.model_copy(
+            update={
+                "active_project_id": project.project_id,
+                "active_project_name": project.name,
+                "available_projects": projects,
+                "updated_at": updated_at or datetime.now(UTC),
+            }
+        )
+        self._records[grant_id] = updated
+        return updated
+
+    def set_available_projects(
+        self,
+        *,
+        grant_id: str,
+        projects: list[ProjectSummary],
+        updated_at: datetime | None = None,
+    ) -> DriveRepoRecord:
+        record = self._records[grant_id]
+        updated = record.model_copy(
+            update={
+                "available_projects": list(projects),
+                "updated_at": updated_at or datetime.now(UTC),
+            }
+        )
+        self._records[grant_id] = updated
+        return updated
+
+
+def _replace_project(
+    projects: list[ProjectSummary],
+    project: ProjectSummary,
+) -> list[ProjectSummary]:
+    replaced = False
+    result: list[ProjectSummary] = []
+    for item in projects:
+        if item.project_id == project.project_id:
+            result.append(project)
+            replaced = True
+        else:
+            result.append(item)
+    if not replaced:
+        result.append(project)
+    return result

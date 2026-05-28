@@ -32,11 +32,9 @@ class SadSaveDriveUploadError(Exception):
 
 class SadSaveRepository:
     def __init__(self) -> None:
-        self._records: dict[str, SadSaveRecord] = {}
-        self._by_idempotency_key: dict[str, str] = {}
-        self._next_save_number = 1
-        self._next_artifact_number = 1
-        self._next_manifest_number = 1
+        self._records: dict[tuple[str, str, str], SadSaveRecord] = {}
+        self._by_idempotency_key: dict[str, tuple[str, str, str]] = {}
+        self._counters: dict[tuple[str, str, str], int] = {}
         self._next_fake_doc_number = 1
 
     def save_preview(
@@ -45,41 +43,49 @@ class SadSaveRepository:
         owner_uid: str,
         owner_email: str | None,
         repo: DriveRepoRecord,
+        project_id: str | None = None,
         preview_record: SadPreviewRecord,
         sources: list[SourceRecord],
         saved_at: datetime | None = None,
         mode: str = "local",
         drive_client: DriveClient | None = None,
         secret_store: SecretStore | None = None,
+        target_folder_id: str | None = None,
     ) -> SadSaveRecord:
         now = saved_at or datetime.now(UTC)
+        effective_project_id = project_id or repo.active_project_id or repo.project_id
         preview_revision = preview_record.created_at.isoformat()
         idempotency_key = _idempotency_key(
             owner_uid=owner_uid,
             repo_grant_id=repo.grant_id,
+            project_id=effective_project_id,
             preview_id=preview_record.preview_id,
             preview_revision=preview_revision,
         )
-        existing_save_id = self._by_idempotency_key.get(idempotency_key)
-        if existing_save_id:
-            return self._records[existing_save_id]
+        existing_key = self._by_idempotency_key.get(idempotency_key)
+        if existing_key:
+            return self._records[existing_key]
 
-        save_id = f"SV-{self._next_save_number:06d}"
-        self._next_save_number += 1
-        manifest_id = f"SM-{self._next_manifest_number:06d}"
-        self._next_manifest_number += 1
+        save_id = f"SV-{self._next_number(repo.grant_id, effective_project_id, 'sad_save'):06d}"
+        manifest_id = f"SM-{self._next_number(repo.grant_id, effective_project_id, 'manifest'):06d}"
         source_ids = [source.source_id for source in sources]
         sad_doc = self._sad_doc_artifact(
+            artifact_id=self._next_artifact_id(repo.grant_id, effective_project_id),
             save_id=save_id,
             preview_record=preview_record,
             source_ids=source_ids,
             created_at=now,
         )
         source_artifacts = [
-            self._source_artifact(source=source, created_at=now)
+            self._source_artifact(
+                artifact_id=self._next_artifact_id(repo.grant_id, effective_project_id),
+                source=source,
+                created_at=now,
+            )
             for source in sources
         ]
         manifest_artifact = self._generic_artifact(
+            artifact_id=self._next_artifact_id(repo.grant_id, effective_project_id),
             artifact_type="manifest",
             title=f"_SADify manifest for {save_id}",
             path=f"_SADify/manifest-{save_id}.json",
@@ -87,6 +93,7 @@ class SadSaveRepository:
             created_at=now,
         )
         change_log_artifact = self._generic_artifact(
+            artifact_id=self._next_artifact_id(repo.grant_id, effective_project_id),
             artifact_type="change_log",
             title=f"_SADify change log for {save_id}",
             path=f"_SADify/change-log-{save_id}.json",
@@ -122,7 +129,7 @@ class SadSaveRepository:
             idempotency_key=idempotency_key,
             owner_uid=owner_uid,
             owner_email=owner_email,
-            project_id=repo.project_id,
+            project_id=effective_project_id,
             repo_grant_id=repo.grant_id,
             repo_folder_id=repo.repo_folder_id,
             repo_folder_name=repo.repo_folder_name,
@@ -149,10 +156,12 @@ class SadSaveRepository:
                 drive_client=drive_client,
                 secret_store=secret_store,
                 updated_at=now,
+                target_folder_id=target_folder_id,
             )
 
-        self._records[save_id] = record
-        self._by_idempotency_key[idempotency_key] = save_id
+        record_key = (repo.grant_id, effective_project_id, save_id)
+        self._records[record_key] = record
+        self._by_idempotency_key[idempotency_key] = record_key
         return record
 
     def _with_live_drive_artifact(
@@ -165,6 +174,7 @@ class SadSaveRepository:
         drive_client: DriveClient | None,
         secret_store: SecretStore | None,
         updated_at: datetime,
+        target_folder_id: str | None,
     ) -> SadSaveRecord:
         if drive_client is None or secret_store is None:
             raise SadSaveTokenMissingError("Live Drive dependencies are not configured.")
@@ -180,7 +190,7 @@ class SadSaveRepository:
         try:
             upload = drive_client.upload_markdown_as_doc(
                 access_token=access_token,
-                folder_id=repo.repo_folder_id,
+                folder_id=target_folder_id or repo.repo_folder_id,
                 title=preview_record.preview.title,
                 markdown=compose_sad_markdown(preview_record.preview),
             )
@@ -209,8 +219,24 @@ class SadSaveRepository:
             }
         )
 
-    def get_save(self, save_id: str) -> SadSaveRecord | None:
-        return self._records.get(save_id)
+    def get_save(
+        self,
+        save_id: str,
+        *,
+        repo_grant_id: str | None = None,
+        project_id: str | None = None,
+    ) -> SadSaveRecord | None:
+        if repo_grant_id is not None and project_id is not None:
+            return self._records.get((repo_grant_id, project_id, save_id))
+        for (grant_id, stored_project_id, stored_save_id), record in self._records.items():
+            if stored_save_id != save_id:
+                continue
+            if repo_grant_id is not None and grant_id != repo_grant_id:
+                continue
+            if project_id is not None and stored_project_id != project_id:
+                continue
+            return record
+        return None
 
     def record_count(self) -> int:
         return len(self._records)
@@ -218,6 +244,7 @@ class SadSaveRepository:
     def _sad_doc_artifact(
         self,
         *,
+        artifact_id: str,
         save_id: str,
         preview_record: SadPreviewRecord,
         source_ids: list[str],
@@ -226,6 +253,7 @@ class SadSaveRepository:
         fake_doc_id = f"LOCAL-GDOC-{self._next_fake_doc_number:06d}"
         self._next_fake_doc_number += 1
         return self._artifact(
+            artifact_id=artifact_id,
             artifact_type="google_doc",
             title=preview_record.preview.title,
             path=f"SAD/SAD-{preview_record.preview_id}-{save_id}.google_doc",
@@ -239,11 +267,13 @@ class SadSaveRepository:
     def _source_artifact(
         self,
         *,
+        artifact_id: str,
         source: SourceRecord,
         created_at: datetime,
     ) -> SadSaveArtifact:
         safe_name = _safe_path_part(source.original_file_name)
         return self._artifact(
+            artifact_id=artifact_id,
             artifact_type="source_reference",
             title=f"Source reference {source.source_id}: {source.original_file_name}",
             path=f"Sources/{source.source_id}-{safe_name}.source-ref.json",
@@ -257,6 +287,7 @@ class SadSaveRepository:
     def _generic_artifact(
         self,
         *,
+        artifact_id: str,
         artifact_type: str,
         title: str,
         path: str,
@@ -264,6 +295,7 @@ class SadSaveRepository:
         created_at: datetime,
     ) -> SadSaveArtifact:
         return self._artifact(
+            artifact_id=artifact_id,
             artifact_type=artifact_type,
             title=title,
             path=path,
@@ -277,6 +309,7 @@ class SadSaveRepository:
     def _artifact(
         self,
         *,
+        artifact_id: str,
         artifact_type: str,
         title: str,
         path: str,
@@ -286,8 +319,6 @@ class SadSaveRepository:
         source_ids: list[str],
         created_at: datetime,
     ) -> SadSaveArtifact:
-        artifact_id = f"SA-{self._next_artifact_number:06d}"
-        self._next_artifact_number += 1
         return SadSaveArtifact(
             artifact_id=artifact_id,
             artifact_type=artifact_type,
@@ -300,15 +331,27 @@ class SadSaveRepository:
             created_at=created_at,
         )
 
+    def _next_artifact_id(self, grant_id: str, project_id: str) -> str:
+        return f"SA-{self._next_number(grant_id, project_id, 'artifact'):06d}"
+
+    def _next_number(self, grant_id: str, project_id: str, counter_name: str) -> int:
+        key = (grant_id, project_id, counter_name)
+        value = self._counters.get(key, 1)
+        self._counters[key] = value + 1
+        return value
+
 
 def _idempotency_key(
     *,
     owner_uid: str,
     repo_grant_id: str,
+    project_id: str,
     preview_id: str,
     preview_revision: str,
 ) -> str:
-    return "|".join([owner_uid, repo_grant_id, preview_id, preview_revision])
+    return "|".join(
+        [owner_uid, repo_grant_id, project_id, preview_id, preview_revision]
+    )
 
 
 def _safe_path_part(value: str) -> str:

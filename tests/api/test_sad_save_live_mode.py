@@ -8,6 +8,7 @@ from sadify_api.schemas import SadPreviewResponse
 from sadify_api.services.auth import VerifiedFirebaseUser
 from sadify_api.services.drive_client import (
     DriveFolder,
+    DriveFolderRef,
     DriveTokens,
     DriveTokenInvalidError,
     DriveUploadError,
@@ -32,7 +33,7 @@ class AcceptingTokenVerifier:
 
 def test_live_save_uploads_markdown_and_returns_real_doc_id():
     client, _save_repo, drive_client, _secret_store = _live_client()
-    _connect(client)
+    _connect_and_create_project(client)
     preview = _save_preview(_preview_repo(client))
 
     response = _save(client, preview.preview_id)
@@ -45,7 +46,7 @@ def test_live_save_uploads_markdown_and_returns_real_doc_id():
 
 def test_live_save_uses_real_web_view_link():
     client, _save_repo, _drive_client, _secret_store = _live_client()
-    _connect(client)
+    _connect_and_create_project(client)
     preview = _save_preview(_preview_repo(client))
 
     response = _save(client, preview.preview_id)
@@ -59,7 +60,7 @@ def test_live_save_uses_real_web_view_link():
 
 def test_live_save_returns_existing_record_on_idempotent_repeat_without_reupload():
     client, save_repo, drive_client, _secret_store = _live_client()
-    _connect(client)
+    _connect_and_create_project(client)
     preview = _save_preview(_preview_repo(client))
 
     first = _save(client, preview.preview_id)
@@ -76,7 +77,7 @@ def test_live_save_returns_existing_record_on_idempotent_repeat_without_reupload
 
 def test_live_save_blocks_when_refresh_token_missing():
     client, _save_repo, _drive_client, secret_store = _live_client()
-    _connect(client)
+    _connect_and_create_project(client)
     secret_store.refresh_tokens.clear()
     preview = _save_preview(_preview_repo(client))
 
@@ -91,8 +92,8 @@ def test_live_save_blocks_when_refresh_token_missing():
 
 def test_live_save_blocks_when_refresh_token_invalid():
     client, _save_repo, drive_client, _secret_store = _live_client()
+    _connect_and_create_project(client)
     drive_client.refresh_error = DriveTokenInvalidError("invalid")
-    _connect(client)
     preview = _save_preview(_preview_repo(client))
 
     response = _save(client, preview.preview_id)
@@ -107,7 +108,7 @@ def test_live_save_blocks_when_refresh_token_invalid():
 def test_live_save_surfaces_drive_upload_failure_as_502():
     client, _save_repo, drive_client, _secret_store = _live_client()
     drive_client.upload_error = DriveUploadError("upload failed")
-    _connect(client)
+    _connect_and_create_project(client)
     preview = _save_preview(_preview_repo(client))
 
     response = _save(client, preview.preview_id)
@@ -121,7 +122,7 @@ def test_live_save_surfaces_drive_upload_failure_as_502():
 
 def test_live_save_persists_real_ids_into_repository():
     client, save_repo, _drive_client, _secret_store = _live_client()
-    _connect(client)
+    _connect_and_create_project(client)
     preview = _save_preview(_preview_repo(client))
 
     response = _save(client, preview.preview_id)
@@ -133,9 +134,21 @@ def test_live_save_persists_real_ids_into_repository():
     assert saved.sad_doc.url == "https://docs.google.com/document/d/real-doc-001/edit"
 
 
+def test_live_save_writes_into_active_project_sad_subfolder():
+    client, _save_repo, drive_client, _secret_store = _live_client()
+    _connect_and_create_project(client)
+    preview = _save_preview(_preview_repo(client))
+
+    response = _save(client, preview.preview_id)
+
+    assert response.status_code == 200
+    assert ("SAD", "project-folder-001") in drive_client.folder_lookups
+    assert drive_client.uploaded_folder_id == "sad-folder-001"
+
+
 def test_local_save_unchanged_when_mode_is_local():
     client, _save_repo, _drive_client, _secret_store = _local_client()
-    _connect(client)
+    _connect_and_create_project(client)
     preview = _save_preview(_preview_repo(client))
 
     response = _save(client, preview.preview_id)
@@ -192,6 +205,17 @@ def _connect(client: TestClient):
     return response.json()
 
 
+def _connect_and_create_project(client: TestClient):
+    _connect(client)
+    response = client.post(
+        "/projects",
+        headers=_auth_header(),
+        json={"name": "Operations MVP"},
+    )
+    assert response.status_code == 200
+    return response.json()
+
+
 def _save(client: TestClient, preview_id: str):
     return client.post(
         "/sad/save",
@@ -212,6 +236,7 @@ def _config(mode: str) -> ApiConfig:
     return ApiConfig(
         environment="test",
         drive_mode=mode,
+        drive_live_enabled=mode == "live",
         drive_folder_name="SADify Projects",
         google_oauth_client_id="client-id",
         google_oauth_client_secret_name="sadify-drive-oauth-client-secret",
@@ -242,6 +267,8 @@ class FakeDriveClient:
         self.upload_error: Exception | None = None
         self.upload_count = 0
         self.uploaded_markdown = ""
+        self.uploaded_folder_id = ""
+        self.folder_lookups: list[tuple[str, str | None]] = []
 
     def exchange_authorization_code(
         self,
@@ -258,8 +285,25 @@ class FakeDriveClient:
         self,
         access_token: str,
         folder_name: str,
+        parent_folder_id: str | None = None,
     ) -> DriveFolder:
-        return DriveFolder(folder_id="drive-folder-001", name=folder_name)
+        self.folder_lookups.append((folder_name, parent_folder_id))
+        folder_ids = {
+            ("SADify Projects", None): "drive-folder-001",
+            ("Operations MVP", "drive-folder-001"): "project-folder-001",
+            ("SAD", "project-folder-001"): "sad-folder-001",
+        }
+        return DriveFolder(
+            folder_id=folder_ids.get((folder_name, parent_folder_id), "drive-folder-001"),
+            name=folder_name,
+        )
+
+    def list_subfolders(
+        self,
+        access_token: str,
+        parent_folder_id: str,
+    ) -> list[DriveFolderRef]:
+        return []
 
     def refresh_access_token(self, refresh_token: str) -> str:
         if self.refresh_error:
@@ -276,6 +320,7 @@ class FakeDriveClient:
     ) -> DriveUploadResult:
         self.upload_count += 1
         self.uploaded_markdown = markdown
+        self.uploaded_folder_id = folder_id
         if self.upload_error:
             raise self.upload_error
         return DriveUploadResult(

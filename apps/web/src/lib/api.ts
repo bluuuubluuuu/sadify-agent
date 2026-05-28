@@ -291,6 +291,29 @@ export type SourceUploadResponse = {
   analysis_context: string;
 };
 
+export type ProjectSummary = {
+  project_id: string;
+  name: string;
+  drive_folder_id: string;
+  created_at: string;
+};
+
+export type ProjectListResponse = {
+  active_project_id: string | null;
+  active_project_name: string | null;
+  projects: ProjectSummary[];
+};
+
+export type CreateProjectResponse = {
+  project: ProjectSummary;
+  active_project_id: string;
+};
+
+export type SwitchProjectResponse = {
+  active_project_id: string;
+  active_project_name: string;
+};
+
 export type DriveRepoRecord = {
   grant_id: string;
   project_id: string;
@@ -305,8 +328,14 @@ export type DriveRepoRecord = {
     name: string;
     purpose: string;
   }>;
-  token_store: "local_metadata_only" | "secret_manager_pending";
+  token_store:
+    | "local_metadata_only"
+    | "secret_manager_pending"
+    | "secret_manager";
   saves_blocked: boolean;
+  active_project_id: string | null;
+  active_project_name: string | null;
+  available_projects: ProjectSummary[];
   created_at: string;
   updated_at: string;
   disconnected_at: string | null;
@@ -319,6 +348,18 @@ export type DriveRepoDisconnectResponse = {
 };
 
 const baseUrl = process.env.NEXT_PUBLIC_SADIFY_API_BASE_URL ?? "http://localhost:8000";
+
+export class BackendApiError extends Error {
+  code: string | null;
+  status: number;
+
+  constructor(message: string, code: string | null, status: number) {
+    super(message);
+    this.name = "BackendApiError";
+    this.code = code;
+    this.status = status;
+  }
+}
 
 async function readBackendError(
   response: Response,
@@ -341,6 +382,31 @@ async function readBackendError(
     return fallbackMessage;
   }
   return fallbackMessage;
+}
+
+async function readBackendErrorDetail(
+  response: Response,
+  fallbackMessage: string,
+): Promise<{ message: string; code: string | null }> {
+  try {
+    const payload = (await response.json()) as { detail?: unknown };
+    if (typeof payload.detail === "string" && payload.detail.trim()) {
+      return { message: payload.detail, code: null };
+    }
+    if (payload.detail && typeof payload.detail === "object") {
+      const detail = payload.detail as { message?: unknown; code?: unknown };
+      return {
+        message:
+          typeof detail.message === "string" && detail.message.trim()
+            ? detail.message
+            : fallbackMessage,
+        code: typeof detail.code === "string" ? detail.code : null,
+      };
+    }
+  } catch {
+    return { message: fallbackMessage, code: null };
+  }
+  return { message: fallbackMessage, code: null };
 }
 
 export async function verifyAuthSession(idToken: string): Promise<AuthSessionResponse> {
@@ -484,9 +550,11 @@ export async function saveSadPreview(
   });
 
   if (!response.ok) {
-    throw new Error(
-      await readBackendError(response, "SADify could not save this SAD preview yet."),
+    const detail = await readBackendErrorDetail(
+      response,
+      "SADify could not save this SAD preview yet.",
     );
+    throw new BackendApiError(detail.message, detail.code, response.status);
   }
 
   return response.json();
@@ -505,9 +573,11 @@ export async function previewWikiUpdate(
   });
 
   if (!response.ok) {
-    throw new Error(
-      await readBackendError(response, "SADify could not prepare the wiki update yet."),
+    const detail = await readBackendErrorDetail(
+      response,
+      "SADify could not prepare the wiki update yet.",
     );
+    throw new BackendApiError(detail.message, detail.code, response.status);
   }
 
   return response.json();
@@ -531,9 +601,11 @@ export async function commitWikiUpdate(
   });
 
   if (!response.ok) {
-    throw new Error(
-      await readBackendError(response, "SADify could not update the wiki yet."),
+    const detail = await readBackendErrorDetail(
+      response,
+      "SADify could not update the wiki yet.",
     );
+    throw new BackendApiError(detail.message, detail.code, response.status);
   }
 
   return response.json();
@@ -582,6 +654,75 @@ export async function connectDriveRepo(input: {
 
   if (!response.ok) {
     throw new Error("Could not connect this Google Drive project repo.");
+  }
+
+  return response.json();
+}
+
+export async function listProjects(idToken: string): Promise<ProjectListResponse> {
+  const response = await fetch(`${baseUrl}/projects`, {
+    method: "GET",
+    headers: {
+      Authorization: `Bearer ${idToken}`,
+    },
+  });
+
+  if (!response.ok) {
+    const detail = await readBackendErrorDetail(
+      response,
+      "Could not load projects for this repo.",
+    );
+    throw new BackendApiError(detail.message, detail.code, response.status);
+  }
+
+  return response.json();
+}
+
+export async function createProject(
+  idToken: string,
+  name: string,
+): Promise<CreateProjectResponse> {
+  const response = await fetch(`${baseUrl}/projects`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${idToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ name }),
+  });
+
+  if (!response.ok) {
+    const detail = await readBackendErrorDetail(
+      response,
+      "Could not create this project.",
+    );
+    throw new BackendApiError(detail.message, detail.code, response.status);
+  }
+
+  return response.json();
+}
+
+export async function switchProject(
+  idToken: string,
+  projectId: string,
+): Promise<SwitchProjectResponse> {
+  const response = await fetch(`${baseUrl}/projects/switch`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${idToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      project_id: projectId,
+    }),
+  });
+
+  if (!response.ok) {
+    const detail = await readBackendErrorDetail(
+      response,
+      "Could not switch projects.",
+    );
+    throw new BackendApiError(detail.message, detail.code, response.status);
   }
 
   return response.json();

@@ -467,6 +467,37 @@ class DriveRepoConnectRequest(ApiModel):
     create_new_repo: bool = False
 
 
+class ProjectSummary(ApiModel):
+    project_id: str
+    name: str
+    drive_folder_id: str
+    created_at: datetime
+
+
+class CreateProjectRequest(ApiModel):
+    name: str = Field(min_length=1, max_length=80)
+
+
+class CreateProjectResponse(ApiModel):
+    project: ProjectSummary
+    active_project_id: str
+
+
+class SwitchProjectRequest(ApiModel):
+    project_id: str = Field(min_length=1)
+
+
+class SwitchProjectResponse(ApiModel):
+    active_project_id: str
+    active_project_name: str
+
+
+class ProjectListResponse(ApiModel):
+    active_project_id: str | None = None
+    active_project_name: str | None = None
+    projects: list[ProjectSummary] = Field(default_factory=list)
+
+
 class DriveRepoRecord(ApiModel):
     grant_id: str
     project_id: str
@@ -483,6 +514,9 @@ class DriveRepoRecord(ApiModel):
     created_at: datetime
     updated_at: datetime
     disconnected_at: datetime | None = None
+    active_project_id: str | None = None
+    active_project_name: str | None = None
+    available_projects: list[ProjectSummary] = Field(default_factory=list)
 
 
 class DriveRepoDisconnectResponse(ApiModel):

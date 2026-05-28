@@ -9,6 +9,7 @@ from sadify_api.services.auth import VerifiedFirebaseUser
 from sadify_api.services.drive_client import (
     DriveFolder,
     DriveFolderCreateError,
+    DriveFolderRef,
     DriveOauthExchangeError,
     DriveTokens,
 )
@@ -154,6 +155,83 @@ def test_local_connect_unchanged_when_mode_is_local():
     assert payload["repo_folder_id"] == "LOCAL-DRIVE-FOLDER-000001"
     assert payload["repo_folder_name"] == "Operations MVP"
     assert payload["token_store"] == "local_metadata_only"
+    assert payload["available_projects"] == []
+    assert payload["active_project_id"] is None
+
+
+def test_live_connect_returns_available_projects_synced_from_drive():
+    client, _repo, drive_client, _secret_store = _live_client(
+        subfolders=[
+            DriveFolderRef(
+                folder_id="project-folder-001",
+                name="Project A",
+                created_time=datetime(2026, 5, 28, 10, 0, tzinfo=UTC),
+                web_view_link="https://drive.google.com/project-a",
+            )
+        ]
+    )
+
+    response = _connect(client)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["active_project_id"] is None
+    assert payload["active_project_name"] is None
+    assert payload["available_projects"] == [
+        {
+            "project_id": "PR-000001",
+            "name": "Project A",
+            "drive_folder_id": "project-folder-001",
+            "created_at": "2026-05-28T10:00:00Z",
+        }
+    ]
+    assert drive_client.listed_parent_folder_id == "drive-folder-001"
+
+
+def test_live_connect_returns_empty_projects_when_drive_has_no_subfolders():
+    client, _repo, _drive_client, _secret_store = _live_client(subfolders=[])
+
+    response = _connect(client)
+
+    assert response.status_code == 200
+    assert response.json()["available_projects"] == []
+
+
+def test_connect_does_not_auto_activate_any_project():
+    client, repository, _drive_client, _secret_store = _live_client(
+        subfolders=[
+            DriveFolderRef(
+                folder_id="project-folder-001",
+                name="Project A",
+                created_time=datetime(2026, 5, 28, 10, 0, tzinfo=UTC),
+                web_view_link=None,
+            )
+        ]
+    )
+
+    response = _connect(client)
+
+    assert response.status_code == 200
+    assert response.json()["active_project_id"] is None
+    repo = repository.get_active_repo("firebase-uid-001")
+    assert repo is not None
+    assert repo.active_project_id is None
+
+
+def test_live_connect_project_listing_blocks_when_live_gate_disabled():
+    repository = DriveRepoRepository()
+    client = TestClient(
+        create_app(
+            config=_config("live", drive_live_enabled=False),
+            token_verifier=AcceptingTokenVerifier(),
+            drive_repo_repository=repository,
+        )
+    )
+
+    response = _connect(client)
+
+    assert response.status_code == 503
+    assert response.json()["detail"]["code"] == "DRIVE_LIVE_MODE_DISABLED"
 
 
 def _live_client(
@@ -162,12 +240,14 @@ def _live_client(
     drive_error: Exception | None = None,
     folder_error: Exception | None = None,
     secret_write_error: bool = False,
+    subfolders: list[DriveFolderRef] | None = None,
 ):
     repository = DriveRepoRepository()
     drive_client = FakeDriveClient(
         folder_id=folder_id,
         drive_error=drive_error,
         folder_error=folder_error,
+        subfolders=subfolders,
     )
     secret_store = FakeSecretStore(secret_write_error=secret_write_error)
     client = TestClient(
@@ -195,13 +275,14 @@ def _connect(client: TestClient):
     )
 
 
-def _config(mode: str) -> ApiConfig:
+def _config(mode: str, *, drive_live_enabled: bool = False) -> ApiConfig:
     return ApiConfig(
         environment="test",
         drive_mode=mode,
         drive_folder_name="SADify Projects",
         google_oauth_client_id="client-id",
         google_oauth_client_secret_name="sadify-drive-oauth-client-secret",
+        drive_live_enabled=drive_live_enabled,
     )
 
 
@@ -224,6 +305,9 @@ class FakeSecretStore:
             raise RuntimeError("secret write failed")
         self.refresh_tokens[uid] = refresh_token
 
+    def get_user_refresh_token(self, uid: str) -> str | None:
+        return self.refresh_tokens.get(uid)
+
     def delete_user_secret(self, uid: str) -> None:
         self.deleted_uids.append(uid)
         if self.delete_error:
@@ -237,6 +321,7 @@ class FakeDriveClient:
         folder_id: str,
         drive_error: Exception | None = None,
         folder_error: Exception | None = None,
+        subfolders: list[DriveFolderRef] | None = None,
     ) -> None:
         self.folder_id = folder_id
         self.drive_error = drive_error
@@ -244,6 +329,8 @@ class FakeDriveClient:
         self.exchanged_code: str | None = None
         self.exchanged_redirect_uri: str | None = None
         self.folder_name: str | None = None
+        self.subfolders = subfolders
+        self.listed_parent_folder_id: str | None = None
 
     def exchange_authorization_code(
         self,
@@ -269,3 +356,15 @@ class FakeDriveClient:
             raise self.folder_error
         self.folder_name = folder_name
         return DriveFolder(folder_id=self.folder_id, name=folder_name)
+
+    def refresh_access_token(self, refresh_token: str) -> str:
+        return "access-token"
+
+    def list_subfolders(
+        self,
+        *,
+        access_token: str,
+        parent_folder_id: str,
+    ) -> list[DriveFolderRef]:
+        self.listed_parent_folder_id = parent_folder_id
+        return list(self.subfolders or [])

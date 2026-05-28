@@ -52,6 +52,9 @@ def test_drive_repo_connect_creates_project_locked_folder_structure():
         {"name": "Wiki", "purpose": "Latest living project brain."},
         {"name": "_SADify", "purpose": "Manifest, extraction text, backups, logs, and metadata."},
     ]
+    assert payload["active_project_id"] is None
+    assert payload["active_project_name"] is None
+    assert payload["available_projects"] == []
     assert payload["saves_blocked"] is False
     assert "mock-authorization-code" not in response.text
 

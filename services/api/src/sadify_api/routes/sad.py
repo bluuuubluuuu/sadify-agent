@@ -17,6 +17,7 @@ from sadify_api.schemas import (
     SadSaveApiResponse,
     SadSaveRequest,
     DriveRepoRecord,
+    ProjectSummary,
     SadSaveRecord,
     SourceRecord,
     WikiBackupInfo,
@@ -54,6 +55,7 @@ from sadify_api.services.sad_save import (
     SadSaveTokenInvalidError,
     SadSaveTokenMissingError,
 )
+from sadify_api.services.projects import ProjectRepository
 from sadify_api.services.wiki_backup import (
     WikiBackupError,
     snapshot_existing_wiki_files,
@@ -78,6 +80,7 @@ def create_sad_router(
     drive_client: DriveClient | None = None,
     secret_store: SecretStore | None = None,
     wiki_state_repository: WikiStateRepository | None = None,
+    project_repository: ProjectRepository | None = None,
 ) -> APIRouter:
     config = config or load_api_config()
     router = APIRouter(prefix="/sad", tags=["sad"])
@@ -206,6 +209,39 @@ def create_sad_router(
                 "SAD_SAVE_REPO_DISCONNECTED",
                 "Reconnect Google Drive before saving.",
             )
+        if not repo.active_project_id:
+            raise _sad_save_error(
+                409,
+                "PROJECT_REQUIRED",
+                "Create or select a project before saving.",
+            )
+        project = None
+        if project_repository is not None:
+            project = project_repository.get_project(
+                repo.grant_id,
+                repo.active_project_id,
+            )
+            if project is None:
+                raise _sad_save_error(
+                    409,
+                    "PROJECT_REQUIRED",
+                    "Create or select a project before saving.",
+                )
+        if project is None:
+            project = next(
+                (
+                    candidate
+                    for candidate in repo.available_projects
+                    if candidate.project_id == repo.active_project_id
+                ),
+                None,
+            )
+        if project is None:
+            raise _sad_save_error(
+                409,
+                "PROJECT_REQUIRED",
+                "Create or select a project before saving.",
+            )
 
         preview_record = repository.get_preview(preview_id)
         if preview_record is None:
@@ -230,21 +266,44 @@ def create_sad_router(
         try:
             live_drive_client = drive_client
             live_secret_store = secret_store
+            target_folder_id = None
             if config.drive_mode == "live":
                 live_drive_client, live_secret_store = _resolve_live_services(
                     config=config,
                     drive_client=drive_client,
                     secret_store=secret_store,
                 )
+                refresh_token = live_secret_store.get_user_refresh_token(user.uid)
+                if not refresh_token:
+                    raise SadSaveTokenMissingError("Drive refresh token is missing.")
+                try:
+                    access_token = live_drive_client.refresh_access_token(refresh_token)
+                except DriveTokenInvalidError as exc:
+                    raise SadSaveTokenInvalidError(
+                        "Drive refresh token is invalid or expired."
+                    ) from exc
+                try:
+                    sad_folder = live_drive_client.find_or_create_folder(
+                        access_token=access_token,
+                        folder_name="SAD",
+                        parent_folder_id=project.drive_folder_id,
+                    )
+                except DriveFolderCreateError as exc:
+                    raise SadSaveDriveUploadError(
+                        "Google Drive rejected the upload."
+                    ) from exc
+                target_folder_id = sad_folder.folder_id
             record = sad_save_repository.save_preview(
                 owner_uid=user.uid,
                 owner_email=user.email,
                 repo=repo,
+                project_id=repo.active_project_id,
                 preview_record=preview_record,
                 sources=sources,
                 mode=config.drive_mode,
                 drive_client=live_drive_client,
                 secret_store=live_secret_store,
+                target_folder_id=target_folder_id,
             )
         except SadSaveTokenMissingError as exc:
             raise _sad_save_error(
@@ -281,6 +340,7 @@ def create_sad_router(
             drive_repo_repository=drive_repo_repository,
             sad_save_repository=sad_save_repository,
             source_repository=source_repository,
+            project_repository=project_repository,
             config=config,
             drive_client=drive_client,
             secret_store=secret_store,
@@ -306,6 +366,7 @@ def create_sad_router(
             remote = remote_files.get(draft.name)
             state = wiki_state_repository.get_file_state(
                 context.repo.grant_id,
+                context.project.project_id,
                 draft.name,
             )
             last_known_hash = state.hash if state is not None else None
@@ -345,6 +406,7 @@ def create_sad_router(
             drive_repo_repository=drive_repo_repository,
             sad_save_repository=sad_save_repository,
             source_repository=source_repository,
+            project_repository=project_repository,
             config=config,
             drive_client=drive_client,
             secret_store=secret_store,
@@ -382,7 +444,7 @@ def create_sad_router(
             backup = snapshot_existing_wiki_files(
                 drive_client=context.drive_client,
                 access_token=context.access_token,
-                repo_folder_id=context.repo.repo_folder_id,
+                repo_folder_id=context.project.drive_folder_id,
                 existing_files=existing_files,
             )
         except WikiBackupError as exc:
@@ -408,6 +470,7 @@ def create_sad_router(
                 )
                 wiki_state_repository.record_file_write(
                     context.repo.grant_id,
+                    context.project.project_id,
                     WikiState(
                         file_name=draft.name,
                         file_id=upload.file_id,
@@ -449,6 +512,7 @@ def create_sad_router(
 @dataclass(frozen=True)
 class _WikiRouteContext:
     repo: DriveRepoRecord
+    project: ProjectSummary
     latest_save: SadSaveRecord
     all_saves_for_repo: list[SadSaveRecord]
     sources: list[SourceRecord]
@@ -496,6 +560,7 @@ def _build_wiki_context(
     drive_repo_repository: DriveRepoRepository,
     sad_save_repository: SadSaveRepository,
     source_repository: SourceRepository,
+    project_repository: ProjectRepository | None,
     config: ApiConfig,
     drive_client: DriveClient | None,
     secret_store: SecretStore | None,
@@ -533,6 +598,10 @@ def _build_wiki_context(
             "WIKI_REPO_DISCONNECTED",
             "Reconnect Google Drive before updating the wiki.",
         )
+    project = _active_project_or_error(
+        repo=repo,
+        project_repository=project_repository,
+    )
     if config.drive_mode != "live" or not config.drive_live_enabled:
         raise _wiki_error(
             503,
@@ -540,7 +609,11 @@ def _build_wiki_context(
             "Live wiki updates are disabled for this process.",
         )
 
-    saves = _saves_for_repo(sad_save_repository, repo.grant_id)
+    saves = _saves_for_project(
+        sad_save_repository,
+        repo.grant_id,
+        project.project_id,
+    )
     if not saves:
         raise _wiki_error(
             409,
@@ -571,6 +644,7 @@ def _build_wiki_context(
         ) from exc
     return _WikiRouteContext(
         repo=repo,
+        project=project,
         latest_save=latest_save,
         all_saves_for_repo=saves,
         sources=sources,
@@ -579,9 +653,42 @@ def _build_wiki_context(
     )
 
 
-def _saves_for_repo(
+def _active_project_or_error(
+    *,
+    repo: DriveRepoRecord,
+    project_repository: ProjectRepository | None,
+) -> ProjectSummary:
+    if not repo.active_project_id:
+        raise _wiki_error(
+            409,
+            "WIKI_PROJECT_REQUIRED",
+            "Create or select a project before updating the wiki.",
+        )
+    if project_repository is not None:
+        project = project_repository.get_project(repo.grant_id, repo.active_project_id)
+        if project is not None:
+            return project
+    project = next(
+        (
+            candidate
+            for candidate in repo.available_projects
+            if candidate.project_id == repo.active_project_id
+        ),
+        None,
+    )
+    if project is None:
+        raise _wiki_error(
+            409,
+            "WIKI_PROJECT_REQUIRED",
+            "Create or select a project before updating the wiki.",
+        )
+    return project
+
+
+def _saves_for_project(
     sad_save_repository: SadSaveRepository,
     repo_grant_id: str,
+    project_id: str,
 ) -> list[SadSaveRecord]:
     records = getattr(sad_save_repository, "_records", {})
     return sorted(
@@ -589,6 +696,7 @@ def _saves_for_repo(
             record
             for record in records.values()
             if record.repo_grant_id == repo_grant_id
+            and record.project_id == project_id
         ],
         key=lambda record: record.created_at,
     )
@@ -629,7 +737,7 @@ def _wiki_folder(context: _WikiRouteContext):
     return context.drive_client.find_or_create_folder(
         access_token=context.access_token,
         folder_name=WIKI_FOLDER_NAME,
-        parent_folder_id=context.repo.repo_folder_id,
+        parent_folder_id=context.project.drive_folder_id,
     )
 
 

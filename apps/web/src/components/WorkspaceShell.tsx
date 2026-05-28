@@ -4,6 +4,8 @@ import { useState } from "react";
 import { AnalysisPanel } from "./AnalysisPanel";
 import { AuthPanel } from "./AuthPanel";
 import type {
+  CreateProjectResponse,
+  DriveRepoRecord,
   RequirementAnalysisApiResponse,
   SadPreviewApiResponse,
   SadSaveApiResponse,
@@ -13,6 +15,7 @@ import type { CategoryStatus, WorkspaceState } from "../lib/mockState";
 import { ChangeSummary } from "./ChangeSummary";
 import { DraftPanel } from "./DraftPanel";
 import { DriveRepoPanel } from "./DriveRepoPanel";
+import { ProjectPanel } from "./ProjectPanel";
 import { SadPreviewPanel } from "./SadPreviewPanel";
 import { SourceUploadPanel } from "./SourceUploadPanel";
 
@@ -26,6 +29,7 @@ export function WorkspaceShell({ state }: Props) {
   const [analysisResponse, setAnalysisResponse] =
     useState<RequirementAnalysisApiResponse | null>(null);
   const [analysisRequirementText, setAnalysisRequirementText] = useState("");
+  const [driveRepo, setDriveRepo] = useState<DriveRepoRecord | null>(null);
 
   function applyAnalysis(
     response: RequirementAnalysisApiResponse,
@@ -95,6 +99,31 @@ export function WorkspaceShell({ state }: Props) {
         response.record.source_artifact_references.length
           ? `${response.record.source_artifact_references.length} source reference(s) linked`
           : "No uploaded source references linked",
+      ],
+    }));
+  }
+
+  function applyProjectCreated(response: CreateProjectResponse) {
+    setDriveRepo((current) => {
+      if (!current) {
+        return current;
+      }
+      const otherProjects = current.available_projects.filter(
+        (project) => project.project_id !== response.project.project_id,
+      );
+      return {
+        ...current,
+        active_project_id: response.active_project_id,
+        active_project_name: response.project.name,
+        available_projects: [...otherProjects, response.project],
+      };
+    });
+    setWorkspaceState((current) => ({
+      ...current,
+      projectStatus: [
+        `Active project: ${response.project.name}`,
+        "Project folder selected",
+        "SAD and wiki saves will use this project",
       ],
     }));
   }
@@ -171,9 +200,11 @@ export function WorkspaceShell({ state }: Props) {
 
       <AuthPanel />
 
+      <ProjectPanel repo={driveRepo} onRepoChanged={setDriveRepo} />
+
       <DraftPanel />
 
-      <DriveRepoPanel />
+      <DriveRepoPanel repo={driveRepo} onRepoChanged={setDriveRepo} />
 
       <SourceUploadPanel onSourcesUploaded={applySourceUpload} />
 
@@ -192,6 +223,7 @@ export function WorkspaceShell({ state }: Props) {
         sourceReferences={sourceReferences}
         onPreviewSaved={applySadPreview}
         onSadSaved={applySadSaved}
+        onProjectCreated={applyProjectCreated}
       />
 
       <ChangeSummary

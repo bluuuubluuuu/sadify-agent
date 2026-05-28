@@ -24,6 +24,7 @@ class AcceptingTokenVerifier:
 def test_sad_save_success_creates_local_artifacts():
     client, drive_repo, preview_repo, save_repo, _source_repo = _client_with_repos()
     _connect_repo(client)
+    _create_project(client, "Operations App")
     preview_record = _save_preview(preview_repo)
 
     response = client.post(
@@ -38,6 +39,7 @@ def test_sad_save_success_creates_local_artifacts():
     assert payload["message"] == "SAD preview saved to the local project repo record."
     record = payload["record"]
     assert record["save_id"] == "SV-000001"
+    assert record["project_id"] == "PR-000001"
     assert record["preview_id"] == "SP-000001"
     assert record["repo_grant_id"] == "DG-000001"
     assert record["repo_folder_name"] == "Operations MVP"
@@ -95,6 +97,24 @@ def test_sad_save_blocks_without_active_repo():
     assert response.json()["detail"]["code"] == "SAD_SAVE_REPO_REQUIRED"
 
 
+def test_sad_save_blocks_when_no_active_project():
+    client, _drive_repo, preview_repo, _save_repo, _source_repo = _client_with_repos()
+    _connect_repo(client)
+    preview_record = _save_preview(preview_repo)
+
+    response = client.post(
+        "/sad/save",
+        headers=_auth_header(),
+        json={"preview_id": preview_record.preview_id},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == {
+        "code": "PROJECT_REQUIRED",
+        "message": "Create or select a project before saving.",
+    }
+
+
 def test_sad_save_blocks_disconnected_repo():
     client, drive_repo, preview_repo, _save_repo, _source_repo = _client_with_repos()
     _connect_repo(client)
@@ -118,6 +138,7 @@ def test_sad_save_blocks_disconnected_repo():
 def test_sad_save_requires_preview_id():
     client, _drive_repo, _preview_repo, _save_repo, _source_repo = _client_with_repos()
     _connect_repo(client)
+    _create_project(client, "Operations App")
 
     response = client.post(
         "/sad/save",
@@ -132,6 +153,7 @@ def test_sad_save_requires_preview_id():
 def test_sad_save_rejects_unknown_preview_id():
     client, _drive_repo, _preview_repo, _save_repo, _source_repo = _client_with_repos()
     _connect_repo(client)
+    _create_project(client, "Operations App")
 
     response = client.post(
         "/sad/save",
@@ -146,6 +168,7 @@ def test_sad_save_rejects_unknown_preview_id():
 def test_sad_save_is_idempotent_for_same_preview_revision():
     client, _drive_repo, preview_repo, save_repo, _source_repo = _client_with_repos()
     _connect_repo(client)
+    _create_project(client, "Operations App")
     preview_record = _save_preview(preview_repo)
 
     first = client.post(
@@ -171,6 +194,7 @@ def test_sad_save_is_idempotent_for_same_preview_revision():
 def test_sad_save_includes_uploaded_source_refs_when_sources_exist():
     client, _drive_repo, preview_repo, _save_repo, source_repo = _client_with_repos()
     _connect_repo(client)
+    _create_project(client, "Operations App")
     source = source_repo.save_extracted_source(
         extracted=ExtractedRequirementSource(
             filename="laundry workflow.pdf",
@@ -196,6 +220,88 @@ def test_sad_save_includes_uploaded_source_refs_when_sources_exist():
     assert source_artifact["artifact_type"] == "source_reference"
     assert source_artifact["source_ids"] == ["SRC-000001"]
     assert source_artifact["path"].startswith("Sources/")
+
+
+def test_save_counter_starts_at_one_per_project():
+    client, _drive_repo, preview_repo, _save_repo, _source_repo = _client_with_repos()
+    _connect_repo(client)
+    _create_project(client, "Project A")
+    preview_record = _save_preview(preview_repo)
+
+    response = client.post(
+        "/sad/save",
+        headers=_auth_header(),
+        json={"preview_id": preview_record.preview_id},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["record"]["save_id"] == "SV-000001"
+
+
+def test_save_counter_increments_only_within_project():
+    client, _drive_repo, preview_repo, _save_repo, _source_repo = _client_with_repos()
+    _connect_repo(client)
+    first_project = _create_project(client, "Project A")
+    first_preview = _save_preview(preview_repo)
+    second_preview = _save_preview(preview_repo)
+    _save(client, first_preview.preview_id)
+    first_second_save = _save(client, second_preview.preview_id)
+
+    second_project = _create_project(client, "Project B")
+    third_preview = _save_preview(preview_repo)
+    second_project_first_save = _save(client, third_preview.preview_id)
+
+    assert first_project["project"]["project_id"] == "PR-000001"
+    assert first_second_save["record"]["save_id"] == "SV-000002"
+    assert second_project["project"]["project_id"] == "PR-000002"
+    assert second_project_first_save["record"]["save_id"] == "SV-000001"
+
+
+def test_save_id_collision_impossible_across_projects():
+    client, _drive_repo, preview_repo, save_repo, _source_repo = _client_with_repos()
+    _connect_repo(client)
+    _create_project(client, "Project A")
+    first_preview = _save_preview(preview_repo)
+    first = _save(client, first_preview.preview_id)["record"]
+    _create_project(client, "Project B")
+    second_preview = _save_preview(preview_repo)
+    second = _save(client, second_preview.preview_id)["record"]
+
+    assert first["save_id"] == "SV-000001"
+    assert second["save_id"] == "SV-000001"
+    assert first["project_id"] == "PR-000001"
+    assert second["project_id"] == "PR-000002"
+    assert (
+        save_repo.get_save(
+            "SV-000001",
+            repo_grant_id="DG-000001",
+            project_id="PR-000001",
+        ).preview_id
+        == first["preview_id"]
+    )
+    assert (
+        save_repo.get_save(
+            "SV-000001",
+            repo_grant_id="DG-000001",
+            project_id="PR-000002",
+        ).preview_id
+        == second["preview_id"]
+    )
+
+
+def test_existing_idempotency_key_includes_project_id_implicitly():
+    client, _drive_repo, preview_repo, save_repo, _source_repo = _client_with_repos()
+    _connect_repo(client)
+    _create_project(client, "Project A")
+    preview_record = _save_preview(preview_repo)
+    first = _save(client, preview_record.preview_id)["record"]
+    _create_project(client, "Project B")
+    second = _save(client, preview_record.preview_id)["record"]
+
+    assert first["save_id"] == "SV-000001"
+    assert second["save_id"] == "SV-000001"
+    assert first["idempotency_key"] != second["idempotency_key"]
+    assert save_repo.record_count() == 2
 
 
 def _client_with_repos():
@@ -225,6 +331,26 @@ def _connect_repo(client: TestClient):
             "repo_folder_name": "Operations MVP",
             "create_new_repo": True,
         },
+    )
+    assert response.status_code == 200
+    return response.json()
+
+
+def _create_project(client: TestClient, name: str):
+    response = client.post(
+        "/projects",
+        headers=_auth_header(),
+        json={"name": name},
+    )
+    assert response.status_code == 200
+    return response.json()
+
+
+def _save(client: TestClient, preview_id: str):
+    response = client.post(
+        "/sad/save",
+        headers=_auth_header(),
+        json={"preview_id": preview_id},
     )
     assert response.status_code == 200
     return response.json()

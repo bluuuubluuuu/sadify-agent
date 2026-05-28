@@ -17,6 +17,7 @@ from sadify_api.services.drive_client import (
     DriveOauthExchangeError,
 )
 from sadify_api.services.drive_repo import DriveRepoRepository, DriveTokenPersistError
+from sadify_api.services.projects import ProjectRepository
 from sadify_api.services.secret_store import SecretStore, get_secret_store
 
 logger = logging.getLogger(__name__)
@@ -28,6 +29,7 @@ def create_drive_router(
     config: ApiConfig | None = None,
     drive_client: DriveClient | None = None,
     secret_store: SecretStore | None = None,
+    project_repository: ProjectRepository | None = None,
 ) -> APIRouter:
     config = config or load_api_config()
     router = APIRouter(prefix="/drive", tags=["drive"])
@@ -47,7 +49,7 @@ def create_drive_router(
                     drive_client=drive_client,
                     secret_store=secret_store,
                 )
-            return repository.connect_repo(
+            record = repository.connect_repo(
                 owner_uid=user.uid,
                 owner_email=user.email,
                 request=request,
@@ -56,6 +58,30 @@ def create_drive_router(
                 secret_store=live_secret_store,
                 drive_folder_name=config.drive_folder_name,
             )
+            if (
+                config.drive_mode == "live"
+                and live_drive_client is not None
+                and live_secret_store is not None
+                and project_repository is not None
+            ):
+                refresh_token = live_secret_store.get_user_refresh_token(user.uid)
+                access_token = (
+                    live_drive_client.refresh_access_token(refresh_token)
+                    if refresh_token
+                    else None
+                )
+                projects = project_repository.sync_from_drive(
+                    grant_id=record.grant_id,
+                    drive_folders=live_drive_client.list_subfolders(
+                        access_token=access_token or "",
+                        parent_folder_id=record.repo_folder_id,
+                    ),
+                )
+                record = repository.set_available_projects(
+                    grant_id=record.grant_id,
+                    projects=projects,
+                )
+            return record
         except DriveOauthExchangeError as exc:
             raise _drive_error(
                 502,

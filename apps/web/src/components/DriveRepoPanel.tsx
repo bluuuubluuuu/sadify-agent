@@ -14,9 +14,17 @@ import {
 
 const DEFAULT_PROJECT_ID = "PROJ-LOCAL-001";
 
-export function DriveRepoPanel() {
+type Props = {
+  repo?: DriveRepoRecord | null;
+  onRepoChanged?: (repo: DriveRepoRecord | null) => void;
+};
+
+export function DriveRepoPanel({
+  repo: controlledRepo,
+  onRepoChanged,
+}: Props) {
   const [repoName, setRepoName] = useState("SADify Project Repo");
-  const [repo, setRepo] = useState<DriveRepoRecord | null>(null);
+  const [localRepo, setLocalRepo] = useState<DriveRepoRecord | null>(null);
   const [message, setMessage] = useState(
     isGoogleOAuthConfigured()
       ? "Connect Drive only when you want to save project files."
@@ -24,6 +32,12 @@ export function DriveRepoPanel() {
   );
   const [isBusy, setIsBusy] = useState(false);
   const showLocalDevConnect = !isGoogleOAuthConfigured();
+  const repo = controlledRepo ?? localRepo;
+
+  function setRepoState(nextRepo: DriveRepoRecord | null) {
+    setLocalRepo(nextRepo);
+    onRepoChanged?.(nextRepo);
+  }
 
   async function connectRepo() {
     const user = getFirebaseAuth().currentUser;
@@ -48,7 +62,7 @@ export function DriveRepoPanel() {
         repoFolderName: repoName,
         createNewRepo: true,
       });
-      setRepo(connected);
+      setRepoState(connected);
       setMessage("Project repo connected. Saves are now allowed for this repo.");
     } catch (error) {
       setMessage(
@@ -79,7 +93,7 @@ export function DriveRepoPanel() {
         repoFolderName: repoName,
         createNewRepo: true,
       });
-      setRepo(connected);
+      setRepoState(connected);
       setMessage("Local dev repo connected (no live Drive call).");
     } catch (error) {
       setMessage(
@@ -104,7 +118,7 @@ export function DriveRepoPanel() {
     try {
       const idToken = await user.getIdToken();
       await disconnectDriveRepo(idToken);
-      setRepo(null);
+      setRepoState(null);
       setMessage("Google Drive disconnected. Project saves are blocked.");
     } catch (error) {
       setMessage(

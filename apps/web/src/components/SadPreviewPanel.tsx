@@ -2,10 +2,13 @@
 
 import { useEffect, useState } from "react";
 import {
+  BackendApiError,
   commitWikiUpdate,
+  createProject,
   generateSadPreview,
   previewWikiUpdate,
   saveSadPreview,
+  type CreateProjectResponse,
   type RequirementAnalysisApiResponse,
   type SadPreviewApiResponse,
   type SadSaveApiResponse,
@@ -14,6 +17,7 @@ import {
 } from "../lib/api";
 import { getFirebaseAuth } from "../lib/firebaseClient";
 import { isGoogleOAuthConfigured } from "../lib/googleOAuth";
+import { CreateProjectDialog } from "./CreateProjectDialog";
 import { WikiUpdateDialog } from "./WikiUpdateDialog";
 
 type Props = {
@@ -23,7 +27,10 @@ type Props = {
   sourceReferences?: string[];
   onPreviewSaved: (response: SadPreviewApiResponse) => void;
   onSadSaved: (response: SadSaveApiResponse) => void;
+  onProjectCreated?: (response: CreateProjectResponse) => void;
 };
+
+type PendingProjectAction = "save" | "wiki" | null;
 
 const readinessLabel: Record<string, string> = {
   ready: "Ready",
@@ -46,6 +53,7 @@ export function SadPreviewPanel({
   sourceReferences = [],
   onPreviewSaved,
   onSadSaved,
+  onProjectCreated,
 }: Props) {
   const [previewResponse, setPreviewResponse] =
     useState<SadPreviewApiResponse | null>(null);
@@ -55,6 +63,7 @@ export function SadPreviewPanel({
   const [wikiUpdateResponse, setWikiUpdateResponse] =
     useState<WikiUpdateResponse | null>(null);
   const [wikiDialogOpen, setWikiDialogOpen] = useState(false);
+  const [projectDialogOpen, setProjectDialogOpen] = useState(false);
   const [message, setMessage] = useState(
     "Temporary preview only. No Google Doc or Drive file is saved here.",
   );
@@ -63,6 +72,9 @@ export function SadPreviewPanel({
   const [isBusy, setIsBusy] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [isWikiBusy, setIsWikiBusy] = useState(false);
+  const [isProjectBusy, setIsProjectBusy] = useState(false);
+  const [pendingProjectAction, setPendingProjectAction] =
+    useState<PendingProjectAction>(null);
   const analysisId = analysisResponse?.analysis_id;
 
   useEffect(() => {
@@ -71,10 +83,73 @@ export function SadPreviewPanel({
     setWikiPreviewResponse(null);
     setWikiUpdateResponse(null);
     setWikiDialogOpen(false);
+    setProjectDialogOpen(false);
+    setPendingProjectAction(null);
     setSaveMessage("");
     setWikiMessage("");
     setMessage("Temporary preview only. No Google Doc or Drive file is saved here.");
   }, [analysisId, requirementText]);
+
+  function suggestProjectName() {
+    const fromPreview = previewResponse?.preview.title.trim();
+    if (fromPreview) {
+      return fromPreview.slice(0, 80);
+    }
+    const cleaned = requirementText.replace(/\s+/g, " ").trim();
+    if (cleaned) {
+      return cleaned.slice(0, 60);
+    }
+    return "Untitled Project";
+  }
+
+  function isProjectRequiredError(error: unknown) {
+    return (
+      error instanceof BackendApiError &&
+      (error.code === "PROJECT_REQUIRED" ||
+        error.code === "WIKI_PROJECT_REQUIRED")
+    );
+  }
+
+  function openProjectDialogFor(action: PendingProjectAction) {
+    setPendingProjectAction(action);
+    setProjectDialogOpen(true);
+  }
+
+  async function retryPendingProjectAction(action: PendingProjectAction) {
+    if (action === "save") {
+      await savePreviewToProjectRepo(true);
+      return;
+    }
+    if (action === "wiki") {
+      await prepareWikiUpdate(true);
+    }
+  }
+
+  async function createProjectForPendingAction(name: string) {
+    const user = getFirebaseAuth().currentUser;
+    if (!user) {
+      setSaveMessage("Sign in before creating a project.");
+      return;
+    }
+    const action = pendingProjectAction;
+    setIsProjectBusy(true);
+    setSaveMessage("Creating project folder...");
+    try {
+      const idToken = await user.getIdToken();
+      const response = await createProject(idToken, name);
+      onProjectCreated?.(response);
+      setProjectDialogOpen(false);
+      setPendingProjectAction(null);
+      setSaveMessage("Project created. Retrying the requested save action.");
+      await retryPendingProjectAction(action);
+    } catch (error) {
+      setSaveMessage(
+        error instanceof Error ? error.message : "Could not create this project.",
+      );
+    } finally {
+      setIsProjectBusy(false);
+    }
+  }
 
   async function createPreview() {
     if (!analysisResponse) {
@@ -97,6 +172,8 @@ export function SadPreviewPanel({
       setWikiPreviewResponse(null);
       setWikiUpdateResponse(null);
       setWikiDialogOpen(false);
+      setProjectDialogOpen(false);
+      setPendingProjectAction(null);
       setSaveMessage("");
       setWikiMessage("");
       onPreviewSaved(response);
@@ -112,7 +189,7 @@ export function SadPreviewPanel({
     }
   }
 
-  async function savePreviewToProjectRepo() {
+  async function savePreviewToProjectRepo(skipProjectDialog = false) {
     if (!previewResponse) {
       setSaveMessage("Generate a SAD preview before saving.");
       return;
@@ -136,6 +213,11 @@ export function SadPreviewPanel({
       onSadSaved(response);
       setSaveMessage("Saved to project repo.");
     } catch (error) {
+      if (!skipProjectDialog && isProjectRequiredError(error)) {
+        openProjectDialogFor("save");
+        setSaveMessage("Create a project before saving this SAD preview.");
+        return;
+      }
       setSaveMessage(
         error instanceof Error
           ? error.message
@@ -146,7 +228,7 @@ export function SadPreviewPanel({
     }
   }
 
-  async function prepareWikiUpdate() {
+  async function prepareWikiUpdate(skipProjectDialog = false) {
     if (!saveResponse) {
       setWikiMessage("Save the SAD preview before updating the wiki.");
       return;
@@ -173,6 +255,11 @@ export function SadPreviewPanel({
       setWikiDialogOpen(false);
       setWikiMessage("Wiki updated.");
     } catch (error) {
+      if (!skipProjectDialog && isProjectRequiredError(error)) {
+        openProjectDialogFor("wiki");
+        setWikiMessage("Create a project before updating the wiki.");
+        return;
+      }
       setWikiMessage(
         error instanceof Error ? error.message : "SADify could not update the wiki yet.",
       );
@@ -206,6 +293,11 @@ export function SadPreviewPanel({
       setWikiDialogOpen(false);
       setWikiMessage("Wiki updated.");
     } catch (error) {
+      if (isProjectRequiredError(error)) {
+        openProjectDialogFor("wiki");
+        setWikiMessage("Create a project before updating the wiki.");
+        return;
+      }
       setWikiMessage(
         error instanceof Error ? error.message : "SADify could not update the wiki yet.",
       );
@@ -247,7 +339,7 @@ export function SadPreviewPanel({
           type="button"
           className="secondary-button"
           disabled={isSaving}
-          onClick={savePreviewToProjectRepo}
+          onClick={() => savePreviewToProjectRepo()}
         >
           Save to project repo
         </button>
@@ -258,7 +350,7 @@ export function SadPreviewPanel({
           type="button"
           className="secondary-button"
           disabled={isWikiBusy}
-          onClick={prepareWikiUpdate}
+          onClick={() => prepareWikiUpdate()}
         >
           Update wiki
         </button>
@@ -406,6 +498,19 @@ export function SadPreviewPanel({
           onCancel={() => {
             setWikiDialogOpen(false);
             setWikiMessage("Wiki update canceled.");
+          }}
+        />
+      ) : null}
+
+      {projectDialogOpen ? (
+        <CreateProjectDialog
+          suggestedName={suggestProjectName()}
+          isBusy={isProjectBusy}
+          onSubmit={createProjectForPendingAction}
+          onCancel={() => {
+            setProjectDialogOpen(false);
+            setPendingProjectAction(null);
+            setSaveMessage("Project creation canceled.");
           }}
         />
       ) : null}

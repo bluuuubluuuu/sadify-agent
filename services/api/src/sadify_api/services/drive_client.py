@@ -5,7 +5,7 @@ import os
 os.environ.setdefault("OAUTHLIB_RELAX_TOKEN_SCOPE", "1")
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from io import BytesIO
 
 from google.auth.transport.requests import Request
@@ -50,6 +50,14 @@ class DriveTokens:
 class DriveFolder:
     folder_id: str
     name: str
+
+
+@dataclass(frozen=True)
+class DriveFolderRef:
+    folder_id: str
+    name: str
+    created_time: datetime
+    web_view_link: str | None
 
 
 @dataclass(frozen=True)
@@ -155,6 +163,43 @@ class DriveClient:
             folder_id=created["id"],
             name=created.get("name", folder_name),
         )
+
+    def list_subfolders(
+        self,
+        *,
+        access_token: str,
+        parent_folder_id: str,
+    ) -> list[DriveFolderRef]:
+        service = self._drive_service(access_token)
+        try:
+            result = service.files().list(
+                q=" and ".join(
+                    [
+                        "mimeType='application/vnd.google-apps.folder'",
+                        f"'{_escape_drive_query(parent_folder_id)}' in parents",
+                        "trashed=false",
+                    ]
+                ),
+                spaces="drive",
+                fields="files(id,name,mimeType,createdTime,webViewLink,trashed)",
+            ).execute()
+        except Exception as exc:
+            raise DriveFolderCreateError(
+                "Could not list SADify project folders."
+            ) from exc
+
+        folders = [
+            DriveFolderRef(
+                folder_id=item["id"],
+                name=item.get("name", "Untitled Project"),
+                created_time=_parse_drive_time(item.get("createdTime")),
+                web_view_link=item.get("webViewLink"),
+            )
+            for item in result.get("files", [])
+            if item.get("mimeType") == "application/vnd.google-apps.folder"
+            and not item.get("trashed", False)
+        ]
+        return sorted(folders, key=lambda folder: folder.created_time)
 
     def upload_markdown_as_doc(
         self,
@@ -293,3 +338,9 @@ def _client_config(client_id: str, client_secret: str) -> dict[str, dict[str, ob
 
 def _escape_drive_query(value: str) -> str:
     return value.replace("\\", "\\\\").replace("'", "\\'")
+
+
+def _parse_drive_time(value: str | None) -> datetime:
+    if not value:
+        return datetime.now(UTC)
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))

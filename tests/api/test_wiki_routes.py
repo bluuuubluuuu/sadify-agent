@@ -5,11 +5,12 @@ from fastapi.testclient import TestClient
 
 from sadify_api.config import ApiConfig
 from sadify_api.main import create_app
-from sadify_api.schemas import SadPreviewResponse
+from sadify_api.schemas import ProjectSummary, SadPreviewResponse
 from sadify_api.services.auth import VerifiedFirebaseUser
 from sadify_api.services.drive_client import (
     DriveFileRef,
     DriveFolder,
+    DriveFolderRef,
     DriveTextFileError,
     DriveTokens,
     DriveUploadResult,
@@ -49,7 +50,7 @@ def test_wiki_preview_returns_all_eight_files_first_time():
     assert payload["files"][0]["relative_path"] == "Wiki/Wiki.md"
     assert payload["files"][0]["proposed_markdown"].startswith("---\n")
     assert all(file["remote_exists"] is False for file in payload["files"])
-    assert fake_drive.folder_lookups[-1] == ("Wiki", "drive-folder-001")
+    assert fake_drive.folder_lookups[-1] == ("Wiki", "project-folder-001")
     assert [call[1] for call in fake_drive.find_file_calls] == EXPECTED_NAMES
     assert all(call[0] == "wiki-folder-001" for call in fake_drive.find_file_calls)
 
@@ -62,6 +63,7 @@ def test_wiki_preview_returns_no_confirmation_when_all_hashes_match():
         fake_drive.remote_text_by_name[name] = remote
         wiki_state.record_file_write(
             repo.grant_id,
+            repo.active_project_id,
             WikiState(
                 file_name=name,
                 file_id=f"remote-{name}",
@@ -86,6 +88,7 @@ def test_wiki_preview_returns_changed_file_when_remote_drifted():
     fake_drive.remote_text_by_name["workflows.md"] = "# Edited in Drive"
     wiki_state.record_file_write(
         repo.grant_id,
+        repo.active_project_id,
         WikiState(
             file_name="workflows.md",
             file_id="remote-workflows.md",
@@ -127,8 +130,9 @@ def test_wiki_preview_blocks_without_active_repo():
 
 
 def test_wiki_preview_blocks_without_prior_sad_save():
-    client, _drive, _preview, _save, _wiki, _fake_drive = _client()
+    client, drive_repo, _preview, _save, _wiki, _fake_drive = _client()
     _connect_repo(client)
+    _set_active_project(drive_repo)
 
     response = client.post("/sad/wiki/preview", headers=_auth_header(), json={})
 
@@ -148,8 +152,9 @@ def test_wiki_preview_blocks_when_saved_preview_is_no_longer_in_memory():
 
 
 def test_wiki_preview_blocks_when_live_mode_disabled():
-    client, _drive, _preview, _save, _wiki, _fake_drive = _client(drive_live_enabled=False)
+    client, drive_repo, _preview, _save, _wiki, _fake_drive = _client(drive_live_enabled=False)
     _connect_repo(client)
+    _set_active_project(drive_repo)
 
     response = client.post("/sad/wiki/preview", headers=_auth_header(), json={})
 
@@ -174,7 +179,7 @@ def test_wiki_update_writes_all_eight_files_first_time_no_backup():
     assert fake_drive.backup_upload_calls == []
     assert all(call["folder_id"] == "wiki-folder-001" for call in fake_drive.wiki_upload_calls)
     for file in payload["files"]:
-        state = wiki_state.get_file_state("DG-000001", file["name"])
+        state = wiki_state.get_file_state("DG-000001", "PR-000001", file["name"])
         assert state is not None
         assert state.hash == file["hash"]
 
@@ -201,7 +206,7 @@ def test_wiki_update_creates_backup_subfolder_when_remote_files_exist():
     assert payload["backup"]["path"].startswith("_SADify/wiki-backups/")
     assert payload["backup"]["file_count"] == 8
     assert [call["name"] for call in fake_drive.backup_upload_calls] == EXPECTED_NAMES
-    assert ("_SADify", "drive-folder-001") in fake_drive.folder_lookups
+    assert ("_SADify", "project-folder-001") in fake_drive.folder_lookups
     assert ("wiki-backups", "sadify-folder-001") in fake_drive.folder_lookups
 
 
@@ -274,7 +279,7 @@ def test_wiki_update_records_per_file_hashes_after_success():
     )
 
     assert response.status_code == 200
-    states = wiki_state.get_all_states("DG-000001")
+    states = wiki_state.get_all_states("DG-000001", "PR-000001")
     assert set(states) == set(EXPECTED_NAMES)
     for file in response.json()["files"]:
         assert states[file["name"]].file_id == file["file_id"]
@@ -342,7 +347,7 @@ def test_wiki_update_writes_into_wiki_subfolder_under_project_root():
     )
 
     assert response.status_code == 200
-    assert ("Wiki", "drive-folder-001") in fake_drive.folder_lookups
+    assert ("Wiki", "project-folder-001") in fake_drive.folder_lookups
     assert all(call["folder_id"] == "wiki-folder-001" for call in fake_drive.wiki_upload_calls)
 
 
@@ -353,13 +358,54 @@ def test_wiki_preview_reads_from_wiki_subfolder_not_project_root():
     response = client.post("/sad/wiki/preview", headers=_auth_header(), json={})
 
     assert response.status_code == 200
-    assert ("Wiki", "drive-folder-001") in fake_drive.folder_lookups
+    assert ("Wiki", "project-folder-001") in fake_drive.folder_lookups
     assert fake_drive.find_file_calls[0] == ("wiki-folder-001", "Wiki.md")
+
+
+def test_wiki_preview_uses_latest_save_for_active_project_only():
+    client, drive_repo, preview_repo, save_repo, _wiki, _fake_drive = _client()
+    _connect_repo(client)
+    _create_project(client, "Front Desk Repairs")
+    project_one_repo = drive_repo.get_active_repo("firebase-uid-001")
+    _save_sad(
+        save_repo,
+        preview_repo,
+        project_one_repo,
+        title="Front Desk SAD",
+        requirement_text="Front desk repair workflow.",
+        created_at=datetime(2026, 5, 27, 9, 0, tzinfo=UTC),
+    )
+    _create_project(client, "Warehouse Returns")
+    project_two_repo = drive_repo.get_active_repo("firebase-uid-001")
+    _save_sad(
+        save_repo,
+        preview_repo,
+        project_two_repo,
+        title="Warehouse SAD",
+        requirement_text="Warehouse return workflow.",
+        created_at=datetime(2026, 5, 27, 10, 0, tzinfo=UTC),
+    )
+    response = client.post(
+        "/projects/switch",
+        headers=_auth_header(),
+        json={"project_id": "PR-000001"},
+    )
+    assert response.status_code == 200
+
+    response = client.post("/sad/wiki/preview", headers=_auth_header(), json={})
+
+    assert response.status_code == 200
+    wiki_index = _file_payload(response.json(), "Wiki.md")
+    requirements = _file_payload(response.json(), "requirements.md")
+    assert "SV-000001" in wiki_index["proposed_markdown"]
+    assert "Front desk repair workflow" in requirements["proposed_markdown"]
+    assert "Warehouse return workflow" not in requirements["proposed_markdown"]
 
 
 def _client_with_saved_sad(**kwargs):
     client, drive_repo, preview_repo, save_repo, wiki_state, fake_drive = _client(**kwargs)
     _connect_repo(client)
+    _create_project(client)
     repo = drive_repo.get_active_repo("firebase-uid-001")
     _save_sad(save_repo, preview_repo, repo)
     return client, drive_repo, preview_repo, save_repo, wiki_state, fake_drive
@@ -408,26 +454,63 @@ def _connect_repo(client: TestClient):
     assert response.status_code == 200
 
 
-def _save_sad(save_repo: SadSaveRepository, preview_repo: SadPreviewRepository, repo):
+def _create_project(client: TestClient, name: str = "Repair Project"):
+    response = client.post(
+        "/projects",
+        headers=_auth_header(),
+        json={"name": name},
+    )
+    assert response.status_code == 200
+    return response.json()
+
+
+def _set_active_project(
+    drive_repo: DriveRepoRepository,
+    *,
+    project_id: str = "PR-000001",
+    name: str = "Repair Project",
+    folder_id: str = "project-folder-001",
+) -> None:
+    drive_repo.set_active_project(
+        grant_id="DG-000001",
+        project=ProjectSummary(
+            project_id=project_id,
+            name=name,
+            drive_folder_id=folder_id,
+            created_at=datetime(2026, 5, 27, 9, 0, tzinfo=UTC),
+        ),
+    )
+
+
+def _save_sad(
+    save_repo: SadSaveRepository,
+    preview_repo: SadPreviewRepository,
+    repo,
+    *,
+    title: str = "Phone Repair SAD",
+    requirement_text: str = "A workshop tracks repairs.",
+    created_at: datetime = datetime(2026, 5, 27, 9, 0, tzinfo=UTC),
+):
     preview_record = preview_repo.save_preview(
-        requirement_text="A workshop tracks repairs.",
+        requirement_text=requirement_text,
         analysis_id="AN-000001",
-        preview=_preview(),
-        created_at=datetime(2026, 5, 27, 9, 0, tzinfo=UTC),
+        preview=_preview(title=title),
+        created_at=created_at,
     )
     return save_repo.save_preview(
         owner_uid="firebase-uid-001",
         owner_email="owner@example.com",
         repo=repo,
+        project_id=repo.active_project_id,
         preview_record=preview_record,
         sources=[],
     )
 
 
-def _preview() -> SadPreviewResponse:
+def _preview(title: str = "Phone Repair SAD") -> SadPreviewResponse:
     return SadPreviewResponse.model_validate(
         {
-            "title": "Phone Repair SAD",
+            "title": title,
             "temporary_notice": "Temporary preview.",
             "it_readiness": {
                 "label": "Layer 2",
@@ -528,12 +611,25 @@ class FakeDriveClient:
         self.folder_lookups.append((folder_name, parent_folder_id))
         folder_ids = {
             ("SADify Projects", None): "drive-folder-001",
-            ("Wiki", "drive-folder-001"): "wiki-folder-001",
-            ("_SADify", "drive-folder-001"): "sadify-folder-001",
+            ("Repair Project", "drive-folder-001"): "project-folder-001",
+            ("Front Desk Repairs", "drive-folder-001"): "project-folder-001",
+            ("Warehouse Returns", "drive-folder-001"): "project-folder-002",
+            ("Wiki", "project-folder-001"): "wiki-folder-001",
+            ("Wiki", "project-folder-002"): "wiki-folder-002",
+            ("_SADify", "project-folder-001"): "sadify-folder-001",
+            ("_SADify", "project-folder-002"): "sadify-folder-002",
             ("wiki-backups", "sadify-folder-001"): "wiki-backups-folder-001",
+            ("wiki-backups", "sadify-folder-002"): "wiki-backups-folder-002",
         }
         folder_id = folder_ids.get((folder_name, parent_folder_id), f"backup-{folder_name}")
         return DriveFolder(folder_id=folder_id, name=folder_name)
+
+    def list_subfolders(
+        self,
+        access_token: str,
+        parent_folder_id: str,
+    ) -> list[DriveFolderRef]:
+        return []
 
     def refresh_access_token(self, refresh_token: str) -> str:
         return "access-token"
