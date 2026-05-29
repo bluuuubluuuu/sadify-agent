@@ -126,6 +126,7 @@ def create_analysis_router(
             record = repository.save_analysis(
                 requirement_text=request.requirement_text,
                 guest_draft_id=request.guest_draft_id,
+                analysis_session_id=request.analysis_session_id,
                 analysis=analysis,
             )
             _log_turn(
@@ -149,6 +150,7 @@ def create_analysis_router(
         record = repository.save_analysis(
             requirement_text=request.requirement_text,
             guest_draft_id=request.guest_draft_id,
+            analysis_session_id=request.analysis_session_id,
             analysis=fallback_analysis,
         )
         _log_turn(

@@ -119,3 +119,175 @@ def test_latest_for_request_returns_most_recent_on_multiple_matches():
     assert found is not None
     assert found.analysis_id == newer.analysis_id
     assert found.analysis_id != older.analysis_id
+
+
+def test_latest_for_session_returns_none_when_no_session_records():
+    repo = RequirementAnalysisRepository()
+    repo.save_analysis(
+        requirement_text="Analyze",
+        analysis=_minimal_analysis(),
+        analysis_session_id="session-other",
+    )
+
+    assert repo.latest_for_session("session-missing") is None
+    assert repo.latest_for_session("") is None
+
+
+def test_latest_for_session_returns_most_recent_matching_session():
+    repo = RequirementAnalysisRepository()
+    older = repo.save_analysis(
+        requirement_text="Analyze",
+        analysis=_minimal_analysis(),
+        analysis_session_id="session-a",
+        created_at=datetime(2026, 5, 29, 8, 0, tzinfo=UTC),
+    )
+    newer = repo.save_analysis(
+        requirement_text="Analyze",
+        analysis=_minimal_analysis(),
+        analysis_session_id="session-a",
+        created_at=datetime(2026, 5, 29, 9, 0, tzinfo=UTC),
+    )
+    repo.save_analysis(
+        requirement_text="Analyze",
+        analysis=_minimal_analysis(),
+        analysis_session_id="session-b",
+        created_at=datetime(2026, 5, 29, 10, 0, tzinfo=UTC),
+    )
+
+    found = repo.latest_for_session("session-a")
+
+    assert found is not None
+    assert found.analysis_id == newer.analysis_id
+    assert found.analysis_id != older.analysis_id
+
+
+def test_latest_for_request_prefers_session_id_over_base_text():
+    repo = RequirementAnalysisRepository()
+    target = repo.save_analysis(
+        requirement_text="Analyze",
+        analysis=_minimal_analysis(),
+        analysis_session_id="session-target",
+        created_at=datetime(2026, 5, 29, 8, 0, tzinfo=UTC),
+    )
+    base_text_match = repo.save_analysis(
+        requirement_text="Analyze",
+        analysis=_minimal_analysis(),
+        analysis_session_id="session-other",
+        created_at=datetime(2026, 5, 29, 9, 0, tzinfo=UTC),
+    )
+
+    found = repo.latest_for_request(
+        RequirementAnalysisRequest(
+            requirement_text="Analyze",
+            analysis_session_id="session-target",
+        )
+    )
+
+    assert found is not None
+    assert found.analysis_id == target.analysis_id
+    assert found.analysis_id != base_text_match.analysis_id
+
+
+def test_latest_for_request_different_session_ids_do_not_collide():
+    repo = RequirementAnalysisRepository()
+    first = repo.save_analysis(
+        requirement_text="Analyze",
+        analysis=_minimal_analysis(),
+        analysis_session_id="session-grooming",
+        created_at=datetime(2026, 5, 29, 8, 0, tzinfo=UTC),
+    )
+    second = repo.save_analysis(
+        requirement_text="Analyze",
+        analysis=_minimal_analysis(),
+        analysis_session_id="session-catering",
+        created_at=datetime(2026, 5, 29, 9, 0, tzinfo=UTC),
+    )
+
+    found_first = repo.latest_for_request(
+        RequirementAnalysisRequest(
+            requirement_text="Analyze",
+            analysis_session_id="session-grooming",
+        )
+    )
+    found_second = repo.latest_for_request(
+        RequirementAnalysisRequest(
+            requirement_text="Analyze",
+            analysis_session_id="session-catering",
+        )
+    )
+    found_fresh = repo.latest_for_request(
+        RequirementAnalysisRequest(
+            requirement_text="Analyze",
+            analysis_session_id="session-new-source",
+        )
+    )
+
+    assert found_first is not None
+    assert found_first.analysis_id == first.analysis_id
+    assert found_second is not None
+    assert found_second.analysis_id == second.analysis_id
+    assert found_fresh is None
+
+
+def test_latest_for_request_same_session_id_carries_forward():
+    repo = RequirementAnalysisRepository()
+    saved = repo.save_analysis(
+        requirement_text="Analyze",
+        analysis=_minimal_analysis(),
+        analysis_session_id="session-a",
+    )
+
+    found = repo.latest_for_request(
+        RequirementAnalysisRequest(
+            requirement_text=(
+                "Analyze\n\n"
+                "Previous question: [category: goal_scope][slot: business_goal] x?\n"
+                "Previous answer: track orders end to end"
+            ),
+            analysis_session_id="session-a",
+        )
+    )
+
+    assert found is not None
+    assert found.analysis_id == saved.analysis_id
+
+
+def test_latest_for_request_falls_back_to_base_text_when_no_session_id():
+    repo = RequirementAnalysisRepository()
+    saved = repo.save_analysis(
+        requirement_text="Analyze",
+        analysis=_minimal_analysis(),
+    )
+
+    found = repo.latest_for_request(
+        RequirementAnalysisRequest(requirement_text="Analyze")
+    )
+
+    assert found is not None
+    assert found.analysis_id == saved.analysis_id
+
+
+def test_latest_for_request_falls_back_to_guest_draft_when_no_session_id():
+    repo = RequirementAnalysisRepository()
+    target = repo.save_analysis(
+        requirement_text="Analyze",
+        guest_draft_id="guest-target",
+        analysis=_minimal_analysis(),
+    )
+    base_match = repo.save_analysis(
+        requirement_text="Analyze",
+        guest_draft_id="guest-other",
+        analysis=_minimal_analysis(),
+        created_at=datetime(2026, 5, 29, 9, 0, tzinfo=UTC),
+    )
+
+    found = repo.latest_for_request(
+        RequirementAnalysisRequest(
+            requirement_text="Analyze",
+            guest_draft_id="guest-target",
+        )
+    )
+
+    assert found is not None
+    assert found.analysis_id == target.analysis_id
+    assert found.analysis_id != base_match.analysis_id

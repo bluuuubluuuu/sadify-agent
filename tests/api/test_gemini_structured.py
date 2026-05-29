@@ -2751,6 +2751,62 @@ def test_understanding_summary_is_preserved_across_fallback_turn():
     )
 
 
+def test_analysis_with_distinct_session_ids_starts_fresh_each_time():
+    """TC-029: signed-in flows with generic typed text must not collide.
+
+    Two independent uploads may both use a base request like "Analyze". The
+    client-provided analysis_session_id is the reset boundary, so the second
+    request must start fresh instead of inheriting the first request's locked
+    goal_scope verdicts.
+    """
+    strong_payload = _payload_with_strong_slots(
+        VALID_PAYLOAD.copy(),
+        [("goal_scope", "business_goal"), ("goal_scope", "in_scope_outcome")],
+        "track pet grooming appointments",
+    )
+    fresh_payload = json.loads(json.dumps(VALID_PAYLOAD))
+    fresh_payload["slot_evidence"] = []
+
+    repository = RequirementAnalysisRepository()
+    model = FakeRequirementAnalysisModel([strong_payload, fresh_payload])
+    client = TestClient(
+        create_app(
+            analysis_model=model,
+            analysis_repository=repository,
+        )
+    )
+
+    r1 = client.post(
+        "/analysis/requirement",
+        json={
+            "requirement_text": "Analyze",
+            "analysis_session_id": "session-grooming",
+        },
+    )
+    assert r1.status_code == 200
+
+    r2 = client.post(
+        "/analysis/requirement",
+        json={
+            "requirement_text": "Analyze",
+            "analysis_session_id": "session-catering",
+        },
+    )
+    assert r2.status_code == 200
+
+    saved1 = repository.get_analysis("AN-000001")
+    saved2 = repository.get_analysis("AN-000002")
+    assert saved1.analysis_session_id == "session-grooming"
+    assert saved2.analysis_session_id == "session-catering"
+
+    cats = {
+        category["id"]: category
+        for category in r2.json()["analysis"]["questionnaire"]["categories"]
+    }
+    assert cats["goal_scope"]["status"] != "ready"
+    assert cats["goal_scope"]["questions_answered"] == 0
+
+
 def test_saved_slot_evidence_persists_merged_carry_forward():
     """Cycle 2A: saved slot_evidence must be the MERGED carry-forward
     list, not just this turn's raw Gemini output. Without this, any

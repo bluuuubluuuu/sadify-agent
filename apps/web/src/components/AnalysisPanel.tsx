@@ -22,6 +22,7 @@ type Props = {
   ) => void;
   sourceContext?: string;
   sourceReferences?: string[];
+  analysisSessionId: string;
 };
 
 export function AnalysisPanel({
@@ -30,6 +31,7 @@ export function AnalysisPanel({
   onAnswerKeptForPreview,
   sourceContext = "",
   sourceReferences = [],
+  analysisSessionId,
 }: Props) {
   const [requirementText, setRequirementText] = useState(
     "Need a simple way to validate an operational workflow idea.",
@@ -54,6 +56,7 @@ export function AnalysisPanel({
     try {
       const response = await analyzeRequirement({
         requirementText: cleanText,
+        analysisSessionId,
         sourceContext: sourceContext || undefined,
         sourceReferences,
       });
@@ -121,6 +124,7 @@ export function AnalysisPanel({
     try {
       const response = await analyzeRequirement({
         requirementText: nextRequirementText,
+        analysisSessionId,
         sourceContext: sourceContext || undefined,
         sourceReferences,
       });

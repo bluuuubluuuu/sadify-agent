@@ -36,6 +36,7 @@ export function WorkspaceShell({ state }: Props) {
   const [analysisRequirementText, setAnalysisRequirementText] = useState("");
   const [driveRepo, setDriveRepo] = useState<DriveRepoRecord | null>(null);
   const [historyRefreshKey, setHistoryRefreshKey] = useState(0);
+  const [analysisSessionId, setAnalysisSessionId] = useState(() => crypto.randomUUID());
 
   useEffect(() => {
     if (!isFirebaseConfigured()) {
@@ -213,6 +214,10 @@ export function WorkspaceShell({ state }: Props) {
   const sourceReferences =
     sourceUpload?.sources.map((source) => source.source_id) ?? [];
 
+  useEffect(() => {
+    setAnalysisSessionId(crypto.randomUUID());
+  }, [sourceReferences.join(","), driveRepo?.active_project_id]);
+
   return (
     <main className="workspace">
       <header className="workspace-header">
@@ -246,6 +251,7 @@ export function WorkspaceShell({ state }: Props) {
         onAnswerKeptForPreview={applyAnswerKeptForPreview}
         sourceContext={sourceContext}
         sourceReferences={sourceReferences}
+        analysisSessionId={analysisSessionId}
       />
 
       <SadPreviewPanel

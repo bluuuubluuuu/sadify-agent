@@ -484,6 +484,7 @@ export async function migrateGuestDraft(
 export async function analyzeRequirement(input: {
   requirementText: string;
   guestDraftId?: string;
+  analysisSessionId?: string;
   sourceContext?: string;
   sourceReferences?: string[];
 }): Promise<RequirementAnalysisApiResponse> {
@@ -495,6 +496,7 @@ export async function analyzeRequirement(input: {
     body: JSON.stringify({
       requirement_text: input.requirementText,
       guest_draft_id: input.guestDraftId ?? null,
+      analysis_session_id: input.analysisSessionId ?? null,
       source_context: input.sourceContext ?? null,
       source_references: input.sourceReferences ?? [],
     }),

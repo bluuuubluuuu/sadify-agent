@@ -220,3 +220,32 @@ def test_live_gemini_qna_ui_uses_one_normal_percentage_and_word_statuses():
     assert "typeof category.progress" not in readiness
     assert "statusLabel[category.status]" in readiness
     assert "analysisResponse ? null" in shell
+
+
+def test_api_ts_sends_analysis_session_id():
+    api = (WEB_SRC / "lib" / "api.ts").read_text(encoding="utf-8")
+
+    assert "analysisSessionId?: string" in api
+    assert "analysis_session_id: input.analysisSessionId ?? null" in api
+
+
+def test_workspace_shell_regenerates_session_on_source_or_project_change():
+    shell = (WEB_SRC / "components" / "WorkspaceShell.tsx").read_text(
+        encoding="utf-8"
+    )
+
+    assert "analysisSessionId" in shell
+    assert "useState(() => crypto.randomUUID())" in shell
+    assert "setAnalysisSessionId(crypto.randomUUID())" in shell
+    assert "[sourceReferences.join(\",\"), driveRepo?.active_project_id]" in shell
+    assert "analysisSessionId={analysisSessionId}" in shell
+
+
+def test_analysis_panel_forwards_analysis_session_id():
+    panel = (WEB_SRC / "components" / "AnalysisPanel.tsx").read_text(
+        encoding="utf-8"
+    )
+
+    assert "analysisSessionId: string" in panel
+    assert "analysisSessionId," in panel
+    assert panel.count("analysisSessionId,") >= 3

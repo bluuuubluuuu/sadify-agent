@@ -219,6 +219,7 @@ class RequirementAnalysisResponse(ApiModel):
 class RequirementAnalysisRequest(ApiModel):
     requirement_text: str = Field(min_length=5)
     guest_draft_id: str | None = None
+    analysis_session_id: str | None = None
     source_context: str | None = None
     source_references: list[str] = Field(default_factory=list)
 
@@ -226,6 +227,7 @@ class RequirementAnalysisRequest(ApiModel):
 class RequirementAnalysisRecord(ApiModel):
     analysis_id: str
     guest_draft_id: str | None = None
+    analysis_session_id: str | None = None
     requirement_text: str
     analysis: RequirementAnalysisResponse
     created_at: datetime
