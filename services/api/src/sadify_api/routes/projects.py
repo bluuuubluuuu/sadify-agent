@@ -6,6 +6,8 @@ from sadify_api.schemas import (
     CreateProjectRequest,
     CreateProjectResponse,
     ProjectListResponse,
+    ProjectSavesResponse,
+    SadSaveSummary,
     SwitchProjectRequest,
     SwitchProjectResponse,
 )
@@ -17,12 +19,14 @@ from sadify_api.services.drive_client import (
 )
 from sadify_api.services.drive_repo import DriveRepoRepository
 from sadify_api.services.projects import ProjectRepository, validate_project_name
+from sadify_api.services.sad_save import SadSaveRepository
 from sadify_api.services.secret_store import SecretStore, get_secret_store
 
 
 def create_projects_router(
     drive_repo_repository: DriveRepoRepository,
     project_repository: ProjectRepository,
+    sad_save_repository: SadSaveRepository,
     token_verifier: TokenVerifier,
     config: ApiConfig | None = None,
     drive_client: DriveClient | None = None,
@@ -128,6 +132,46 @@ def create_projects_router(
             active_project_id=project.project_id,
         )
 
+    @router.get("/{project_id}/saves", response_model=ProjectSavesResponse)
+    def list_project_saves(
+        project_id: str,
+        authorization: str | None = Header(default=None),
+    ) -> ProjectSavesResponse:
+        user = _verified_history_user(authorization, token_verifier)
+        repo = _active_repo_for_history_or_error(drive_repo_repository, user.uid)
+        project = project_repository.get_project(repo.grant_id, project_id)
+        if project is None:
+            raise _project_error(
+                404,
+                "PROJECT_NOT_FOUND",
+                "Project not found in this Drive repo.",
+            )
+        records = sad_save_repository.list_for_project(
+            grant_id=repo.grant_id,
+            project_id=project.project_id,
+        )
+        return ProjectSavesResponse(
+            project_id=project.project_id,
+            project_name=project.name,
+            saves=[
+                SadSaveSummary(
+                    save_id=record.save_id,
+                    preview_id=record.preview_id,
+                    doc_url=record.sad_doc.url,
+                    doc_path=record.sad_doc.path,
+                    title=record.sad_doc.title,
+                    change_summary=record.change_summary,
+                    source_ids=[
+                        artifact.source_ids[0]
+                        for artifact in record.source_artifact_references
+                        if artifact.source_ids
+                    ],
+                    created_at=record.created_at,
+                )
+                for record in records
+            ],
+        )
+
     @router.post("/switch", response_model=SwitchProjectResponse)
     def switch_project(
         request: SwitchProjectRequest,
@@ -167,6 +211,19 @@ def _verified_user(authorization: str | None, token_verifier: TokenVerifier):
         raise
 
 
+def _verified_history_user(authorization: str | None, token_verifier: TokenVerifier):
+    try:
+        return verify_authorization_header(authorization, token_verifier)
+    except HTTPException as exc:
+        if exc.status_code == 401:
+            raise _project_error(
+                401,
+                "PROJECT_AUTH_REQUIRED",
+                "Sign in to view project history.",
+            ) from exc
+        raise
+
+
 def _active_repo_or_error(
     drive_repo_repository: DriveRepoRepository,
     owner_uid: str,
@@ -192,6 +249,35 @@ def _active_repo_or_error(
             409,
             "PROJECT_REPO_DISCONNECTED",
             "Reconnect Google Drive.",
+        )
+    return repo
+
+
+def _active_repo_for_history_or_error(
+    drive_repo_repository: DriveRepoRepository,
+    owner_uid: str,
+):
+    repo = drive_repo_repository.get_active_repo(owner_uid)
+    if repo is None:
+        latest_repo = drive_repo_repository.get_latest_repo(owner_uid)
+        if latest_repo and (
+            latest_repo.status == "disconnected" or latest_repo.saves_blocked
+        ):
+            raise _project_error(
+                409,
+                "PROJECT_REPO_DISCONNECTED",
+                "Reconnect Google Drive to view project history.",
+            )
+        raise _project_error(
+            409,
+            "PROJECT_REPO_REQUIRED",
+            "Connect a Google Drive project repo first.",
+        )
+    if repo.status == "disconnected" or repo.saves_blocked:
+        raise _project_error(
+            409,
+            "PROJECT_REPO_DISCONNECTED",
+            "Reconnect Google Drive to view project history.",
         )
     return repo
 

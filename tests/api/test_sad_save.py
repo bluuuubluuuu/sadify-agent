@@ -1,8 +1,10 @@
+from datetime import UTC, datetime
+
 from fastapi.testclient import TestClient
 
 from sadify.extractors.business_files import ExtractedRequirementSource
 from sadify_api.main import create_app
-from sadify_api.schemas import SadPreviewResponse
+from sadify_api.schemas import DriveRepoRecord, SadPreviewResponse
 from sadify_api.services.auth import VerifiedFirebaseUser
 from sadify_api.services.drive_repo import DriveRepoRepository
 from sadify_api.services.sad_preview import SadPreviewRepository
@@ -304,6 +306,126 @@ def test_existing_idempotency_key_includes_project_id_implicitly():
     assert save_repo.record_count() == 2
 
 
+def test_list_for_project_returns_empty_when_no_saves_yet():
+    save_repo = SadSaveRepository()
+
+    assert save_repo.list_for_project(
+        grant_id="DG-000001",
+        project_id="PR-000001",
+    ) == []
+
+
+def test_list_for_project_returns_only_saves_for_given_project():
+    save_repo = SadSaveRepository()
+    preview_repo = SadPreviewRepository()
+    repo = _drive_repo_record()
+    first_preview = _save_preview(preview_repo)
+    second_preview = _save_preview(preview_repo)
+    first = _direct_save(
+        save_repo,
+        repo=repo,
+        project_id="PR-000001",
+        preview_record=first_preview,
+    )
+    _direct_save(
+        save_repo,
+        repo=repo,
+        project_id="PR-000002",
+        preview_record=second_preview,
+    )
+
+    saves = save_repo.list_for_project(
+        grant_id="DG-000001",
+        project_id="PR-000001",
+    )
+
+    assert saves == [first]
+
+
+def test_list_for_project_returns_records_sorted_most_recent_first():
+    save_repo = SadSaveRepository()
+    preview_repo = SadPreviewRepository()
+    repo = _drive_repo_record()
+    older_preview = _save_preview(preview_repo)
+    newer_preview = _save_preview(preview_repo)
+    older = _direct_save(
+        save_repo,
+        repo=repo,
+        project_id="PR-000001",
+        preview_record=older_preview,
+        saved_at=_dt(2026, 5, 28, 9),
+    )
+    newer = _direct_save(
+        save_repo,
+        repo=repo,
+        project_id="PR-000001",
+        preview_record=newer_preview,
+        saved_at=_dt(2026, 5, 28, 11),
+    )
+
+    saves = save_repo.list_for_project(
+        grant_id="DG-000001",
+        project_id="PR-000001",
+    )
+
+    assert saves == [newer, older]
+
+
+def test_list_for_project_isolated_per_repo_grant():
+    save_repo = SadSaveRepository()
+    preview_repo = SadPreviewRepository()
+    first_repo = _drive_repo_record(grant_id="DG-000001")
+    second_repo = _drive_repo_record(grant_id="DG-000002")
+    first_preview = _save_preview(preview_repo)
+    second_preview = _save_preview(preview_repo)
+    first = _direct_save(
+        save_repo,
+        repo=first_repo,
+        project_id="PR-000001",
+        preview_record=first_preview,
+    )
+    _direct_save(
+        save_repo,
+        repo=second_repo,
+        project_id="PR-000001",
+        preview_record=second_preview,
+    )
+
+    saves = save_repo.list_for_project(
+        grant_id="DG-000001",
+        project_id="PR-000001",
+    )
+
+    assert saves == [first]
+
+
+def test_list_for_project_excludes_other_projects_in_same_grant():
+    save_repo = SadSaveRepository()
+    preview_repo = SadPreviewRepository()
+    repo = _drive_repo_record()
+    first_preview = _save_preview(preview_repo)
+    second_preview = _save_preview(preview_repo)
+    _direct_save(
+        save_repo,
+        repo=repo,
+        project_id="PR-000001",
+        preview_record=first_preview,
+    )
+    other = _direct_save(
+        save_repo,
+        repo=repo,
+        project_id="PR-000002",
+        preview_record=second_preview,
+    )
+
+    saves = save_repo.list_for_project(
+        grant_id="DG-000001",
+        project_id="PR-000002",
+    )
+
+    assert saves == [other]
+
+
 def _client_with_repos():
     drive_repo = DriveRepoRepository()
     preview_repo = SadPreviewRepository()
@@ -377,6 +499,48 @@ def _save_preview(
         analysis_id="AN-000001",
         preview=SadPreviewResponse.model_validate(preview_payload),
     )
+
+
+def _direct_save(
+    save_repo: SadSaveRepository,
+    *,
+    repo: DriveRepoRecord,
+    project_id: str,
+    preview_record,
+    saved_at=None,
+):
+    return save_repo.save_preview(
+        owner_uid="firebase-uid-001",
+        owner_email="owner@example.com",
+        repo=repo,
+        project_id=project_id,
+        preview_record=preview_record,
+        sources=[],
+        saved_at=saved_at,
+    )
+
+
+def _drive_repo_record(grant_id: str = "DG-000001") -> DriveRepoRecord:
+    return DriveRepoRecord(
+        grant_id=grant_id,
+        project_id="PROJ-000001",
+        owner_uid="firebase-uid-001",
+        owner_email="owner@example.com",
+        status="connected",
+        repo_folder_id=f"folder-{grant_id}",
+        repo_folder_name="Operations MVP",
+        repo_url=f"https://drive.google.com/drive/folders/folder-{grant_id}",
+        requested_scopes=["https://www.googleapis.com/auth/drive.file"],
+        folder_structure=[],
+        token_store="local_metadata_only",
+        saves_blocked=False,
+        created_at=_dt(2026, 5, 28, 8),
+        updated_at=_dt(2026, 5, 28, 8),
+    )
+
+
+def _dt(year: int, month: int, day: int, hour: int):
+    return datetime(year, month, day, hour, 0, tzinfo=UTC)
 
 
 def _auth_header() -> dict[str, str]:

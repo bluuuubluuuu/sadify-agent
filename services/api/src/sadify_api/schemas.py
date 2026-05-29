@@ -523,3 +523,20 @@ class DriveRepoDisconnectResponse(ApiModel):
     status: Literal["disconnected"]
     saves_blocked: bool
     repo: DriveRepoRecord | None = None
+
+
+class SadSaveSummary(ApiModel):
+    save_id: str
+    preview_id: str
+    doc_url: str | None
+    doc_path: str
+    title: str
+    change_summary: str
+    source_ids: list[str]
+    created_at: datetime
+
+
+class ProjectSavesResponse(ApiModel):
+    project_id: str
+    project_name: str
+    saves: list[SadSaveSummary]

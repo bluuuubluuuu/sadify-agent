@@ -238,6 +238,23 @@ class SadSaveRepository:
             return record
         return None
 
+    def list_for_project(
+        self,
+        *,
+        grant_id: str,
+        project_id: str,
+    ) -> list[SadSaveRecord]:
+        return sorted(
+            [
+                record
+                for (stored_grant_id, stored_project_id, _save_id), record
+                in self._records.items()
+                if stored_grant_id == grant_id and stored_project_id == project_id
+            ],
+            key=lambda record: record.created_at,
+            reverse=True,
+        )
+
     def record_count(self) -> int:
         return len(self._records)
 

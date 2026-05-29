@@ -314,6 +314,23 @@ export type SwitchProjectResponse = {
   active_project_name: string;
 };
 
+export type SadSaveSummary = {
+  save_id: string;
+  preview_id: string;
+  doc_url: string | null;
+  doc_path: string;
+  title: string;
+  change_summary: string;
+  source_ids: string[];
+  created_at: string;
+};
+
+export type ProjectSavesResponse = {
+  project_id: string;
+  project_name: string;
+  saves: SadSaveSummary[];
+};
+
 export type DriveRepoRecord = {
   grant_id: string;
   project_id: string;
@@ -659,6 +676,23 @@ export async function connectDriveRepo(input: {
   return response.json();
 }
 
+export async function getDriveRepoStatus(
+  idToken: string,
+): Promise<DriveRepoRecord | null> {
+  const response = await fetch(`${baseUrl}/drive/repo/status`, {
+    method: "GET",
+    headers: {
+      Authorization: `Bearer ${idToken}`,
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error("Could not load the current Drive repo status.");
+  }
+
+  return response.json();
+}
+
 export async function listProjects(idToken: string): Promise<ProjectListResponse> {
   const response = await fetch(`${baseUrl}/projects`, {
     method: "GET",
@@ -721,6 +755,28 @@ export async function switchProject(
     const detail = await readBackendErrorDetail(
       response,
       "Could not switch projects.",
+    );
+    throw new BackendApiError(detail.message, detail.code, response.status);
+  }
+
+  return response.json();
+}
+
+export async function listProjectSaves(
+  idToken: string,
+  projectId: string,
+): Promise<ProjectSavesResponse> {
+  const response = await fetch(`${baseUrl}/projects/${projectId}/saves`, {
+    method: "GET",
+    headers: {
+      Authorization: `Bearer ${idToken}`,
+    },
+  });
+
+  if (!response.ok) {
+    const detail = await readBackendErrorDetail(
+      response,
+      "Could not load saved SAD history for this project.",
     );
     throw new BackendApiError(detail.message, detail.code, response.status);
   }

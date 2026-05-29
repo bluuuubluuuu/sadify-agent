@@ -75,3 +75,51 @@ def test_sad_preview_project_required_opens_dialog_and_retries():
     assert "suggestProjectName" in panel
     assert "onProjectCreated" in panel
 
+
+def test_history_panel_file_exists():
+    assert (WEB_SRC / "components" / "ProjectHistoryPanel.tsx").exists()
+
+
+def test_api_ts_exports_list_project_saves():
+    api = (WEB_SRC / "lib" / "api.ts").read_text(encoding="utf-8")
+
+    assert "export type SadSaveSummary" in api
+    assert "export type ProjectSavesResponse" in api
+    assert "export async function listProjectSaves" in api
+    assert "/projects/${projectId}/saves" in api
+
+
+def test_history_panel_renders_empty_state_for_no_saves():
+    panel = (WEB_SRC / "components" / "ProjectHistoryPanel.tsx").read_text(
+        encoding="utf-8"
+    )
+
+    assert "No saves yet" in panel
+    assert "activeProjectId" in panel
+    assert "listProjectSaves" in panel
+
+
+def test_history_panel_renders_save_rows_with_doc_link():
+    panel = (WEB_SRC / "components" / "ProjectHistoryPanel.tsx").read_text(
+        encoding="utf-8"
+    )
+
+    assert "Open Doc" in panel
+    assert "target=\"_blank\"" in panel
+    assert "save.doc_url" in panel
+    assert "save.save_id" in panel
+
+
+def test_history_panel_refreshes_on_project_switch_and_save_callback():
+    panel = (WEB_SRC / "components" / "ProjectHistoryPanel.tsx").read_text(
+        encoding="utf-8"
+    )
+    shell = (WEB_SRC / "components" / "WorkspaceShell.tsx").read_text(
+        encoding="utf-8"
+    )
+
+    assert "refreshKey" in panel
+    assert "activeProjectId" in panel
+    assert "ProjectHistoryPanel" in shell
+    assert "historyRefreshKey" in shell
+    assert "setHistoryRefreshKey" in shell

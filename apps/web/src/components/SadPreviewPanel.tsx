@@ -28,6 +28,7 @@ type Props = {
   onPreviewSaved: (response: SadPreviewApiResponse) => void;
   onSadSaved: (response: SadSaveApiResponse) => void;
   onProjectCreated?: (response: CreateProjectResponse) => void;
+  onHistoryRefresh?: () => void;
 };
 
 type PendingProjectAction = "save" | "wiki" | null;
@@ -54,6 +55,7 @@ export function SadPreviewPanel({
   onPreviewSaved,
   onSadSaved,
   onProjectCreated,
+  onHistoryRefresh,
 }: Props) {
   const [previewResponse, setPreviewResponse] =
     useState<SadPreviewApiResponse | null>(null);
@@ -211,6 +213,7 @@ export function SadPreviewPanel({
       setWikiDialogOpen(false);
       setWikiMessage("");
       onSadSaved(response);
+      onHistoryRefresh?.();
       setSaveMessage("Saved to project repo.");
     } catch (error) {
       if (!skipProjectDialog && isProjectRequiredError(error)) {

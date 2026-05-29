@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { onAuthStateChanged } from "firebase/auth";
+import { useEffect, useState } from "react";
 import { AnalysisPanel } from "./AnalysisPanel";
 import { AuthPanel } from "./AuthPanel";
 import type {
@@ -11,10 +12,14 @@ import type {
   SadSaveApiResponse,
   SourceUploadResponse,
 } from "../lib/api";
+import { getDriveRepoStatus } from "../lib/api";
+import { getFirebaseAuth } from "../lib/firebaseClient";
+import { isFirebaseConfigured } from "../lib/firebaseConfig";
 import type { CategoryStatus, WorkspaceState } from "../lib/mockState";
 import { ChangeSummary } from "./ChangeSummary";
 import { DraftPanel } from "./DraftPanel";
 import { DriveRepoPanel } from "./DriveRepoPanel";
+import { ProjectHistoryPanel } from "./ProjectHistoryPanel";
 import { ProjectPanel } from "./ProjectPanel";
 import { SadPreviewPanel } from "./SadPreviewPanel";
 import { SourceUploadPanel } from "./SourceUploadPanel";
@@ -30,6 +35,28 @@ export function WorkspaceShell({ state }: Props) {
     useState<RequirementAnalysisApiResponse | null>(null);
   const [analysisRequirementText, setAnalysisRequirementText] = useState("");
   const [driveRepo, setDriveRepo] = useState<DriveRepoRecord | null>(null);
+  const [historyRefreshKey, setHistoryRefreshKey] = useState(0);
+
+  useEffect(() => {
+    if (!isFirebaseConfigured()) {
+      return;
+    }
+
+    const auth = getFirebaseAuth();
+    return onAuthStateChanged(auth, async (user) => {
+      if (!user) {
+        setDriveRepo(null);
+        return;
+      }
+      try {
+        const idToken = await user.getIdToken();
+        const repo = await getDriveRepoStatus(idToken);
+        setDriveRepo(repo);
+      } catch {
+        setDriveRepo(null);
+      }
+    });
+  }, []);
 
   function applyAnalysis(
     response: RequirementAnalysisApiResponse,
@@ -202,6 +229,11 @@ export function WorkspaceShell({ state }: Props) {
 
       <ProjectPanel repo={driveRepo} onRepoChanged={setDriveRepo} />
 
+      <ProjectHistoryPanel
+        activeProjectId={driveRepo?.active_project_id ?? null}
+        refreshKey={historyRefreshKey}
+      />
+
       <DraftPanel />
 
       <DriveRepoPanel repo={driveRepo} onRepoChanged={setDriveRepo} />
@@ -224,6 +256,7 @@ export function WorkspaceShell({ state }: Props) {
         onPreviewSaved={applySadPreview}
         onSadSaved={applySadSaved}
         onProjectCreated={applyProjectCreated}
+        onHistoryRefresh={() => setHistoryRefreshKey((current) => current + 1)}
       />
 
       <ChangeSummary
