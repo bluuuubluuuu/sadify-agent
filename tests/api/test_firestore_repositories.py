@@ -491,6 +491,10 @@ class FakeDocumentReference:
         return (self.collection, self.id)
 
     def get(self, transaction=None):
+        if transaction is not None and getattr(transaction, "has_pending_write", False):
+            raise RuntimeError(
+                "Firestore transactions require all reads before any writes."
+            )
         return FakeSnapshot(self.id, self.client.docs.get(self.key))
 
     def set(self, data: dict, merge: bool = False) -> None:
@@ -558,20 +562,57 @@ class FakeQuery:
 
 
 class FakeTransaction:
+    """Models the lifecycle the real ``firestore.transactional`` decorator
+    drives (``_clean_up`` -> ``_begin`` -> wrapped func -> ``_commit``) and
+    buffers writes until commit so reads-after-writes are rejected, matching
+    real Firestore semantics.
+    """
+
+    _read_only = False
+    _max_attempts = 1
+
     def __init__(self, client: FakeFirestoreClient) -> None:
         self.client = client
+        self._id: bytes | None = None
+        self._writes: list[tuple[str, FakeDocumentReference, dict | None, bool]] = []
+
+    @property
+    def in_progress(self) -> bool:
+        return self._id is not None
+
+    @property
+    def has_pending_write(self) -> bool:
+        return bool(self._writes)
+
+    def _clean_up(self) -> None:
+        self._writes = []
+        self._id = None
+
+    def _begin(self, retry_id: bytes | None = None) -> None:
+        self._id = b"fake-transaction"
+
+    def _commit(self) -> list:
+        for op, doc_ref, data, merge in self._writes:
+            if op == "set":
+                doc_ref.set(data, merge=merge)
+            else:
+                doc_ref.delete()
+        self._writes = []
+        self._id = None
+        return []
+
+    def _rollback(self) -> None:
+        self._writes = []
+        self._id = None
 
     def get(self, doc_ref: FakeDocumentReference):
         return doc_ref.get(transaction=self)
 
     def set(self, doc_ref: FakeDocumentReference, data: dict, merge: bool = False) -> None:
-        doc_ref.set(data, merge=merge)
+        self._writes.append(("set", doc_ref, dict(data), merge))
 
     def delete(self, doc_ref: FakeDocumentReference) -> None:
-        doc_ref.delete()
-
-    def commit(self) -> None:
-        return None
+        self._writes.append(("delete", doc_ref, None, False))
 
 
 class FakeSecretStore:

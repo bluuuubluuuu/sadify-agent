@@ -10,6 +10,7 @@ from sadify_api.services.drive_client import DriveFolderRef
 from sadify_api.services.firestore_client import (
     next_counter,
     next_counter_in_transaction,
+    run_in_transaction,
     safe_doc_id,
     snapshot_data,
 )
@@ -169,49 +170,49 @@ class FirestoreProjectRepository:
         created_at: datetime | None = None,
     ) -> ProjectRecord:
         clean_name = name.strip()
-        transaction = self._client.transaction()
         index_ref = self._name_index_ref(grant_id, clean_name)
-        index_snapshot = index_ref.get(transaction=transaction)
-        index_data = snapshot_data(index_snapshot)
-        if index_data:
-            project = self.get_project(grant_id, str(index_data["project_id"]))
-            if project is not None:
-                return project
 
-        project_number = next_counter_in_transaction(
-            self._client,
-            transaction,
-            "project",
-            grant_id,
-            "project",
-        )
-        project_id = f"PR-{project_number:06d}"
-        record = ProjectRecord(
-            project_id=project_id,
-            name=clean_name,
-            drive_folder_id=drive_folder_id,
-            created_at=created_at or datetime.now(UTC),
-        )
-        doc_ref = self._project_ref(grant_id, project_id)
-        transaction.set(
-            doc_ref,
-            {
-                **record.model_dump(mode="json"),
-                "grant_id": grant_id,
-                "order": project_number,
-            },
-        )
-        transaction.set(
-            index_ref,
-            {
-                "grant_id": grant_id,
-                "normalized_name": _normalize_name(clean_name),
-                "project_id": project_id,
-                "project_doc_id": self._project_doc_id(grant_id, project_id),
-            },
-        )
-        transaction.commit()
-        return record
+        def _create(transaction) -> ProjectRecord:
+            index_data = snapshot_data(index_ref.get(transaction=transaction))
+            if index_data:
+                existing = self.get_project(grant_id, str(index_data["project_id"]))
+                if existing is not None:
+                    return existing
+
+            project_number = next_counter_in_transaction(
+                self._client,
+                transaction,
+                "project",
+                grant_id,
+                "project",
+            )
+            project_id = f"PR-{project_number:06d}"
+            record = ProjectRecord(
+                project_id=project_id,
+                name=clean_name,
+                drive_folder_id=drive_folder_id,
+                created_at=created_at or datetime.now(UTC),
+            )
+            transaction.set(
+                self._project_ref(grant_id, project_id),
+                {
+                    **record.model_dump(mode="json"),
+                    "grant_id": grant_id,
+                    "order": project_number,
+                },
+            )
+            transaction.set(
+                index_ref,
+                {
+                    "grant_id": grant_id,
+                    "normalized_name": _normalize_name(clean_name),
+                    "project_id": project_id,
+                    "project_doc_id": self._project_doc_id(grant_id, project_id),
+                },
+            )
+            return record
+
+        return run_in_transaction(self._client, _create)
 
     def create_local_project(
         self,

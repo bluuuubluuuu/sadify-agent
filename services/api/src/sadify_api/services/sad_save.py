@@ -17,7 +17,8 @@ from sadify_api.services.drive_client import (
     DriveUploadError,
 )
 from sadify_api.services.firestore_client import (
-    next_counter_in_transaction,
+    next_counter,
+    run_in_transaction,
     safe_doc_id,
     snapshot_data,
 )
@@ -445,29 +446,17 @@ class FirestoreSadSaveRepository:
                 target_folder_id=target_folder_id,
             )
 
-        transaction = self._client.transaction()
         idempotency_ref = self._idempotency_ref(idempotency_hash)
-        idempotency_data = snapshot_data(idempotency_ref.get(transaction=transaction))
-        if idempotency_data is not None:
-            existing = self.get_save(
-                str(idempotency_data["save_id"]),
-                repo_grant_id=repo.grant_id,
-                project_id=effective_project_id,
-            )
-            if existing is not None:
-                return existing
 
-        save_number = next_counter_in_transaction(
+        save_number = next_counter(
             self._client,
-            transaction,
             "sad_save",
             repo.grant_id,
             effective_project_id,
             "sad_save",
         )
-        manifest_number = next_counter_in_transaction(
+        manifest_number = next_counter(
             self._client,
-            transaction,
             "sad_save",
             repo.grant_id,
             effective_project_id,
@@ -477,7 +466,6 @@ class FirestoreSadSaveRepository:
         manifest_id = f"SM-{manifest_number:06d}"
         source_ids = [source.source_id for source in sources]
         sad_doc = self._sad_doc_artifact(
-            transaction=transaction,
             grant_id=repo.grant_id,
             project_id=effective_project_id,
             save_id=save_id,
@@ -494,7 +482,6 @@ class FirestoreSadSaveRepository:
             )
         source_artifacts = [
             self._source_artifact(
-                transaction=transaction,
                 grant_id=repo.grant_id,
                 project_id=effective_project_id,
                 source=source,
@@ -503,7 +490,6 @@ class FirestoreSadSaveRepository:
             for source in sources
         ]
         manifest_artifact = self._generic_artifact(
-            transaction=transaction,
             grant_id=repo.grant_id,
             project_id=effective_project_id,
             artifact_type="manifest",
@@ -513,7 +499,6 @@ class FirestoreSadSaveRepository:
             created_at=now,
         )
         change_log_artifact = self._generic_artifact(
-            transaction=transaction,
             grant_id=repo.grant_id,
             project_id=effective_project_id,
             artifact_type="change_log",
@@ -576,22 +561,34 @@ class FirestoreSadSaveRepository:
             created_at=now,
             updated_at=now,
         )
-        transaction.set(
-            self._save_ref(repo.grant_id, effective_project_id, save_id),
-            record.model_dump(mode="json"),
-        )
-        transaction.set(
-            idempotency_ref,
-            {
-                "idempotency_key": idempotency_key,
-                "repo_grant_id": repo.grant_id,
-                "project_id": effective_project_id,
-                "save_id": save_id,
-                "created_at": now.isoformat(),
-            },
-        )
-        transaction.commit()
-        return record
+        save_ref = self._save_ref(repo.grant_id, effective_project_id, save_id)
+
+        def _commit(transaction) -> SadSaveRecord:
+            idempotency_data = snapshot_data(
+                idempotency_ref.get(transaction=transaction)
+            )
+            if idempotency_data is not None:
+                existing = self.get_save(
+                    str(idempotency_data["save_id"]),
+                    repo_grant_id=repo.grant_id,
+                    project_id=effective_project_id,
+                )
+                if existing is not None:
+                    return existing
+            transaction.set(save_ref, record.model_dump(mode="json"))
+            transaction.set(
+                idempotency_ref,
+                {
+                    "idempotency_key": idempotency_key,
+                    "repo_grant_id": repo.grant_id,
+                    "project_id": effective_project_id,
+                    "save_id": save_id,
+                    "created_at": now.isoformat(),
+                },
+            )
+            return record
+
+        return run_in_transaction(self._client, _commit)
 
     def get_save(
         self,
@@ -668,7 +665,6 @@ class FirestoreSadSaveRepository:
     def _sad_doc_artifact(
         self,
         *,
-        transaction,
         grant_id: str,
         project_id: str,
         save_id: str,
@@ -676,14 +672,12 @@ class FirestoreSadSaveRepository:
         source_ids: list[str],
         created_at: datetime,
     ) -> SadSaveArtifact:
-        fake_doc_number = next_counter_in_transaction(
+        fake_doc_number = next_counter(
             self._client,
-            transaction,
             "sad_save",
             "fake_doc",
         )
         return self._artifact(
-            transaction=transaction,
             grant_id=grant_id,
             project_id=project_id,
             artifact_type="google_doc",
@@ -699,7 +693,6 @@ class FirestoreSadSaveRepository:
     def _source_artifact(
         self,
         *,
-        transaction,
         grant_id: str,
         project_id: str,
         source: SourceRecord,
@@ -707,7 +700,6 @@ class FirestoreSadSaveRepository:
     ) -> SadSaveArtifact:
         safe_name = _safe_path_part(source.original_file_name)
         return self._artifact(
-            transaction=transaction,
             grant_id=grant_id,
             project_id=project_id,
             artifact_type="source_reference",
@@ -723,7 +715,6 @@ class FirestoreSadSaveRepository:
     def _generic_artifact(
         self,
         *,
-        transaction,
         grant_id: str,
         project_id: str,
         artifact_type: str,
@@ -733,7 +724,6 @@ class FirestoreSadSaveRepository:
         created_at: datetime,
     ) -> SadSaveArtifact:
         return self._artifact(
-            transaction=transaction,
             grant_id=grant_id,
             project_id=project_id,
             artifact_type=artifact_type,
@@ -749,7 +739,6 @@ class FirestoreSadSaveRepository:
     def _artifact(
         self,
         *,
-        transaction,
         grant_id: str,
         project_id: str,
         artifact_type: str,
@@ -761,9 +750,8 @@ class FirestoreSadSaveRepository:
         source_ids: list[str],
         created_at: datetime,
     ) -> SadSaveArtifact:
-        artifact_number = next_counter_in_transaction(
+        artifact_number = next_counter(
             self._client,
-            transaction,
             "sad_save",
             grant_id,
             project_id,
