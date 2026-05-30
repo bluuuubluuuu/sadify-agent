@@ -21,13 +21,18 @@ from sadify_api.services.gemini_structured import (
 )
 from sadify_api.services.guest_drafts import GuestDraftRepository
 from sadify_api.services.source_uploads import SourceRepository
-from sadify_api.services.drive_repo import DriveRepoRepository
+from sadify_api.services.drive_repo import (
+    DriveRepoRepository,
+    FirestoreDriveRepoRepository,
+)
 from sadify_api.services.drive_client import DriveClient
+from sadify_api.services.firestore_client import get_firestore_client
 from sadify_api.services.sad_preview import SadPreviewRepository
-from sadify_api.services.sad_save import SadSaveRepository
+from sadify_api.services.sad_save import FirestoreSadSaveRepository, SadSaveRepository
 from sadify_api.services.secret_store import SecretStore
-from sadify_api.services.projects import ProjectRepository
+from sadify_api.services.projects import FirestoreProjectRepository, ProjectRepository
 from sadify_api.services.wiki_state import (
+    FirestoreWikiStateRepository,
     WikiStateRepository,
     get_wiki_state_repository,
 )
@@ -50,17 +55,36 @@ def create_app(
     project_repository: ProjectRepository | None = None,
 ) -> FastAPI:
     config = config or load_api_config()
+    firestore_client = None
+    if config.persistence_mode == "firestore":
+        firestore_client = get_firestore_client(config.google_cloud_project)
     token_verifier = token_verifier or FirebaseAdminTokenVerifier(config)
     draft_repository = draft_repository or GuestDraftRepository()
     analysis_model = analysis_model or GeminiRequirementAnalysisModel(config)
     analysis_repository = analysis_repository or RequirementAnalysisRepository()
     source_repository = source_repository or SourceRepository()
-    drive_repo_repository = drive_repo_repository or DriveRepoRepository()
+    drive_repo_repository = drive_repo_repository or (
+        FirestoreDriveRepoRepository(firestore_client)
+        if firestore_client is not None
+        else DriveRepoRepository()
+    )
     sad_preview_model = sad_preview_model or GeminiSadPreviewModel(config)
     sad_preview_repository = sad_preview_repository or SadPreviewRepository()
-    sad_save_repository = sad_save_repository or SadSaveRepository()
-    wiki_state_repository = wiki_state_repository or get_wiki_state_repository()
-    project_repository = project_repository or ProjectRepository()
+    sad_save_repository = sad_save_repository or (
+        FirestoreSadSaveRepository(firestore_client)
+        if firestore_client is not None
+        else SadSaveRepository()
+    )
+    wiki_state_repository = wiki_state_repository or (
+        FirestoreWikiStateRepository(firestore_client)
+        if firestore_client is not None
+        else get_wiki_state_repository()
+    )
+    project_repository = project_repository or (
+        FirestoreProjectRepository(firestore_client)
+        if firestore_client is not None
+        else ProjectRepository()
+    )
     app = FastAPI(title="SADify API", version="0.1.0")
     app.add_middleware(
         CORSMiddleware,

@@ -690,14 +690,11 @@ def _saves_for_project(
     repo_grant_id: str,
     project_id: str,
 ) -> list[SadSaveRecord]:
-    records = getattr(sad_save_repository, "_records", {})
     return sorted(
-        [
-            record
-            for record in records.values()
-            if record.repo_grant_id == repo_grant_id
-            and record.project_id == project_id
-        ],
+        sad_save_repository.list_for_project(
+            grant_id=repo_grant_id,
+            project_id=project_id,
+        ),
         key=lambda record: record.created_at,
     )
 

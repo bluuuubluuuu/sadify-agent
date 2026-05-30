@@ -1,5 +1,7 @@
 from datetime import UTC, datetime
+from hashlib import sha256
 import re
+from typing import Protocol
 
 from sadify_api.schemas import (
     DriveRepoRecord,
@@ -13,6 +15,11 @@ from sadify_api.services.drive_client import (
     DriveClient,
     DriveTokenInvalidError,
     DriveUploadError,
+)
+from sadify_api.services.firestore_client import (
+    next_counter_in_transaction,
+    safe_doc_id,
+    snapshot_data,
 )
 from sadify_api.services.sad_markdown import compose_sad_markdown
 from sadify_api.services.secret_store import SecretStore
@@ -28,6 +35,41 @@ class SadSaveTokenInvalidError(Exception):
 
 class SadSaveDriveUploadError(Exception):
     pass
+
+
+class SadSaveRepositoryProtocol(Protocol):
+    def save_preview(
+        self,
+        *,
+        owner_uid: str,
+        owner_email: str | None,
+        repo: DriveRepoRecord,
+        project_id: str | None = None,
+        preview_record: SadPreviewRecord,
+        sources: list[SourceRecord],
+        saved_at: datetime | None = None,
+        mode: str = "local",
+        drive_client: DriveClient | None = None,
+        secret_store: SecretStore | None = None,
+        target_folder_id: str | None = None,
+    ) -> SadSaveRecord: ...
+
+    def get_save(
+        self,
+        save_id: str,
+        *,
+        repo_grant_id: str | None = None,
+        project_id: str | None = None,
+    ) -> SadSaveRecord | None: ...
+
+    def list_for_project(
+        self,
+        *,
+        grant_id: str,
+        project_id: str,
+    ) -> list[SadSaveRecord]: ...
+
+    def record_count(self) -> int: ...
 
 
 class SadSaveRepository:
@@ -358,6 +400,417 @@ class SadSaveRepository:
         return value
 
 
+class FirestoreSadSaveRepository:
+    def __init__(self, client) -> None:
+        self._client = client
+
+    def save_preview(
+        self,
+        *,
+        owner_uid: str,
+        owner_email: str | None,
+        repo: DriveRepoRecord,
+        project_id: str | None = None,
+        preview_record: SadPreviewRecord,
+        sources: list[SourceRecord],
+        saved_at: datetime | None = None,
+        mode: str = "local",
+        drive_client: DriveClient | None = None,
+        secret_store: SecretStore | None = None,
+        target_folder_id: str | None = None,
+    ) -> SadSaveRecord:
+        now = saved_at or datetime.now(UTC)
+        effective_project_id = project_id or repo.active_project_id or repo.project_id
+        preview_revision = preview_record.created_at.isoformat()
+        idempotency_key = _idempotency_key(
+            owner_uid=owner_uid,
+            repo_grant_id=repo.grant_id,
+            project_id=effective_project_id,
+            preview_id=preview_record.preview_id,
+            preview_revision=preview_revision,
+        )
+        idempotency_hash = _idempotency_hash(idempotency_key)
+        existing = self._record_for_idempotency_hash(idempotency_hash)
+        if existing is not None:
+            return existing
+
+        live_upload = None
+        if mode == "live":
+            live_upload = self._upload_live_drive_doc(
+                repo=repo,
+                owner_uid=owner_uid,
+                preview_record=preview_record,
+                drive_client=drive_client,
+                secret_store=secret_store,
+                target_folder_id=target_folder_id,
+            )
+
+        transaction = self._client.transaction()
+        idempotency_ref = self._idempotency_ref(idempotency_hash)
+        idempotency_data = snapshot_data(idempotency_ref.get(transaction=transaction))
+        if idempotency_data is not None:
+            existing = self.get_save(
+                str(idempotency_data["save_id"]),
+                repo_grant_id=repo.grant_id,
+                project_id=effective_project_id,
+            )
+            if existing is not None:
+                return existing
+
+        save_number = next_counter_in_transaction(
+            self._client,
+            transaction,
+            "sad_save",
+            repo.grant_id,
+            effective_project_id,
+            "sad_save",
+        )
+        manifest_number = next_counter_in_transaction(
+            self._client,
+            transaction,
+            "sad_save",
+            repo.grant_id,
+            effective_project_id,
+            "manifest",
+        )
+        save_id = f"SV-{save_number:06d}"
+        manifest_id = f"SM-{manifest_number:06d}"
+        source_ids = [source.source_id for source in sources]
+        sad_doc = self._sad_doc_artifact(
+            transaction=transaction,
+            grant_id=repo.grant_id,
+            project_id=effective_project_id,
+            save_id=save_id,
+            preview_record=preview_record,
+            source_ids=source_ids,
+            created_at=now,
+        )
+        if live_upload is not None:
+            sad_doc = sad_doc.model_copy(
+                update={
+                    "file_id": live_upload.file_id,
+                    "url": live_upload.web_view_link,
+                }
+            )
+        source_artifacts = [
+            self._source_artifact(
+                transaction=transaction,
+                grant_id=repo.grant_id,
+                project_id=effective_project_id,
+                source=source,
+                created_at=now,
+            )
+            for source in sources
+        ]
+        manifest_artifact = self._generic_artifact(
+            transaction=transaction,
+            grant_id=repo.grant_id,
+            project_id=effective_project_id,
+            artifact_type="manifest",
+            title=f"_SADify manifest for {save_id}",
+            path=f"_SADify/manifest-{save_id}.json",
+            mime_type="application/json",
+            created_at=now,
+        )
+        change_log_artifact = self._generic_artifact(
+            transaction=transaction,
+            grant_id=repo.grant_id,
+            project_id=effective_project_id,
+            artifact_type="change_log",
+            title=f"_SADify change log for {save_id}",
+            path=f"_SADify/change-log-{save_id}.json",
+            mime_type="application/json",
+            created_at=now,
+        )
+        artifacts = [
+            sad_doc,
+            manifest_artifact,
+            change_log_artifact,
+            *source_artifacts,
+        ]
+        manifest = SadSaveManifest(
+            manifest_id=manifest_id,
+            repo_grant_id=repo.grant_id,
+            repo_folder_id=repo.repo_folder_id,
+            repo_folder_name=repo.repo_folder_name,
+            preview_id=preview_record.preview_id,
+            preview_revision=preview_revision,
+            analysis_id=preview_record.analysis_id,
+            requirement_text=preview_record.requirement_text,
+            sad_title=preview_record.preview.title,
+            preview_section_count=len(preview_record.preview.sections),
+            preview_assumption_count=len(preview_record.preview.assumptions),
+            preview_open_question_count=len(preview_record.preview.open_questions),
+            preview_source_references=list(preview_record.preview.source_references),
+            source_ids=source_ids,
+            artifact_paths=[artifact.path for artifact in artifacts],
+            saved_at=now,
+        )
+        if live_upload is None:
+            change_summary = (
+                f"SAD preview {preview_record.preview_id} saved to "
+                f"{repo.repo_folder_name} as {sad_doc.path}."
+            )
+        else:
+            change_summary = (
+                f"SAD preview {preview_record.preview_id} saved to "
+                f"{repo.repo_folder_name} as Google Doc {live_upload.web_view_link}."
+            )
+        record = SadSaveRecord(
+            save_id=save_id,
+            idempotency_key=idempotency_key,
+            owner_uid=owner_uid,
+            owner_email=owner_email,
+            project_id=effective_project_id,
+            repo_grant_id=repo.grant_id,
+            repo_folder_id=repo.repo_folder_id,
+            repo_folder_name=repo.repo_folder_name,
+            preview_id=preview_record.preview_id,
+            preview_revision=preview_revision,
+            status="saved",
+            sad_doc=sad_doc,
+            artifacts=artifacts,
+            manifest=manifest,
+            change_summary=change_summary,
+            source_artifact_references=source_artifacts,
+            created_at=now,
+            updated_at=now,
+        )
+        transaction.set(
+            self._save_ref(repo.grant_id, effective_project_id, save_id),
+            record.model_dump(mode="json"),
+        )
+        transaction.set(
+            idempotency_ref,
+            {
+                "idempotency_key": idempotency_key,
+                "repo_grant_id": repo.grant_id,
+                "project_id": effective_project_id,
+                "save_id": save_id,
+                "created_at": now.isoformat(),
+            },
+        )
+        transaction.commit()
+        return record
+
+    def get_save(
+        self,
+        save_id: str,
+        *,
+        repo_grant_id: str | None = None,
+        project_id: str | None = None,
+    ) -> SadSaveRecord | None:
+        if repo_grant_id is not None and project_id is not None:
+            snapshot = self._save_ref(repo_grant_id, project_id, save_id).get()
+            return self._record_from_snapshot(snapshot)
+        query = self._client.collection("sad_saves").where("save_id", "==", save_id)
+        if repo_grant_id is not None:
+            query = query.where("repo_grant_id", "==", repo_grant_id)
+        if project_id is not None:
+            query = query.where("project_id", "==", project_id)
+        for snapshot in query.stream():
+            return self._record_from_snapshot(snapshot)
+        return None
+
+    def list_for_project(
+        self,
+        *,
+        grant_id: str,
+        project_id: str,
+    ) -> list[SadSaveRecord]:
+        snapshots = (
+            self._client.collection("sad_saves")
+            .where("repo_grant_id", "==", grant_id)
+            .where("project_id", "==", project_id)
+            .stream()
+        )
+        records = [
+            record
+            for record in (self._record_from_snapshot(snapshot) for snapshot in snapshots)
+            if record is not None
+        ]
+        return sorted(records, key=lambda record: record.created_at, reverse=True)
+
+    def record_count(self) -> int:
+        return len(list(self._client.collection("sad_saves").stream()))
+
+    def _upload_live_drive_doc(
+        self,
+        *,
+        repo: DriveRepoRecord,
+        owner_uid: str,
+        preview_record: SadPreviewRecord,
+        drive_client: DriveClient | None,
+        secret_store: SecretStore | None,
+        target_folder_id: str | None,
+    ):
+        if drive_client is None or secret_store is None:
+            raise SadSaveTokenMissingError("Live Drive dependencies are not configured.")
+        refresh_token = secret_store.get_user_refresh_token(owner_uid)
+        if not refresh_token:
+            raise SadSaveTokenMissingError("Drive refresh token is missing.")
+        try:
+            access_token = drive_client.refresh_access_token(refresh_token)
+        except DriveTokenInvalidError as exc:
+            raise SadSaveTokenInvalidError(
+                "Drive refresh token is invalid or expired."
+            ) from exc
+        try:
+            return drive_client.upload_markdown_as_doc(
+                access_token=access_token,
+                folder_id=target_folder_id or repo.repo_folder_id,
+                title=preview_record.preview.title,
+                markdown=compose_sad_markdown(preview_record.preview),
+            )
+        except DriveUploadError as exc:
+            raise SadSaveDriveUploadError("Google Drive rejected the upload.") from exc
+
+    def _sad_doc_artifact(
+        self,
+        *,
+        transaction,
+        grant_id: str,
+        project_id: str,
+        save_id: str,
+        preview_record: SadPreviewRecord,
+        source_ids: list[str],
+        created_at: datetime,
+    ) -> SadSaveArtifact:
+        fake_doc_number = next_counter_in_transaction(
+            self._client,
+            transaction,
+            "sad_save",
+            "fake_doc",
+        )
+        return self._artifact(
+            transaction=transaction,
+            grant_id=grant_id,
+            project_id=project_id,
+            artifact_type="google_doc",
+            title=preview_record.preview.title,
+            path=f"SAD/SAD-{preview_record.preview_id}-{save_id}.google_doc",
+            file_id=f"LOCAL-GDOC-{fake_doc_number:06d}",
+            url=f"https://docs.google.com/document/d/LOCAL-GDOC-{fake_doc_number:06d}/edit",
+            mime_type="application/vnd.google-apps.document",
+            source_ids=source_ids,
+            created_at=created_at,
+        )
+
+    def _source_artifact(
+        self,
+        *,
+        transaction,
+        grant_id: str,
+        project_id: str,
+        source: SourceRecord,
+        created_at: datetime,
+    ) -> SadSaveArtifact:
+        safe_name = _safe_path_part(source.original_file_name)
+        return self._artifact(
+            transaction=transaction,
+            grant_id=grant_id,
+            project_id=project_id,
+            artifact_type="source_reference",
+            title=f"Source reference {source.source_id}: {source.original_file_name}",
+            path=f"Sources/{source.source_id}-{safe_name}.source-ref.json",
+            file_id=None,
+            url=None,
+            mime_type="application/json",
+            source_ids=[source.source_id],
+            created_at=created_at,
+        )
+
+    def _generic_artifact(
+        self,
+        *,
+        transaction,
+        grant_id: str,
+        project_id: str,
+        artifact_type: str,
+        title: str,
+        path: str,
+        mime_type: str,
+        created_at: datetime,
+    ) -> SadSaveArtifact:
+        return self._artifact(
+            transaction=transaction,
+            grant_id=grant_id,
+            project_id=project_id,
+            artifact_type=artifact_type,
+            title=title,
+            path=path,
+            file_id=None,
+            url=None,
+            mime_type=mime_type,
+            source_ids=[],
+            created_at=created_at,
+        )
+
+    def _artifact(
+        self,
+        *,
+        transaction,
+        grant_id: str,
+        project_id: str,
+        artifact_type: str,
+        title: str,
+        path: str,
+        file_id: str | None,
+        url: str | None,
+        mime_type: str | None,
+        source_ids: list[str],
+        created_at: datetime,
+    ) -> SadSaveArtifact:
+        artifact_number = next_counter_in_transaction(
+            self._client,
+            transaction,
+            "sad_save",
+            grant_id,
+            project_id,
+            "artifact",
+        )
+        return SadSaveArtifact(
+            artifact_id=f"SA-{artifact_number:06d}",
+            artifact_type=artifact_type,
+            title=title,
+            path=path,
+            file_id=file_id,
+            url=url,
+            mime_type=mime_type,
+            source_ids=source_ids,
+            created_at=created_at,
+        )
+
+    def _record_for_idempotency_hash(
+        self,
+        idempotency_hash: str,
+    ) -> SadSaveRecord | None:
+        data = snapshot_data(self._idempotency_ref(idempotency_hash).get())
+        if data is None:
+            return None
+        return self.get_save(
+            str(data["save_id"]),
+            repo_grant_id=str(data["repo_grant_id"]),
+            project_id=str(data["project_id"]),
+        )
+
+    def _record_from_snapshot(self, snapshot) -> SadSaveRecord | None:
+        data = snapshot_data(snapshot)
+        if data is None:
+            return None
+        return SadSaveRecord.model_validate(data)
+
+    def _save_ref(self, grant_id: str, project_id: str, save_id: str):
+        return self._client.collection("sad_saves").document(
+            safe_doc_id(grant_id, project_id, save_id)
+        )
+
+    def _idempotency_ref(self, idempotency_hash: str):
+        return self._client.collection("sad_save_idempotency").document(
+            idempotency_hash
+        )
+
+
 def _idempotency_key(
     *,
     owner_uid: str,
@@ -369,6 +822,10 @@ def _idempotency_key(
     return "|".join(
         [owner_uid, repo_grant_id, project_id, preview_id, preview_revision]
     )
+
+
+def _idempotency_hash(value: str) -> str:
+    return sha256(value.encode("utf-8")).hexdigest()
 
 
 def _safe_path_part(value: str) -> str:

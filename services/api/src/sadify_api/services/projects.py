@@ -1,12 +1,54 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from hashlib import sha256
 import re
+from typing import Protocol
 
 from sadify_api.schemas import ProjectSummary
 from sadify_api.services.drive_client import DriveFolderRef
+from sadify_api.services.firestore_client import (
+    next_counter,
+    next_counter_in_transaction,
+    safe_doc_id,
+    snapshot_data,
+)
 
 ProjectRecord = ProjectSummary
+
+
+class ProjectRepositoryProtocol(Protocol):
+    def create_project(
+        self,
+        *,
+        grant_id: str,
+        name: str,
+        drive_folder_id: str,
+        created_at: datetime | None = None,
+    ) -> ProjectRecord: ...
+
+    def create_local_project(
+        self,
+        *,
+        grant_id: str,
+        name: str,
+        created_at: datetime | None = None,
+    ) -> ProjectRecord: ...
+
+    def get_project(self, grant_id: str, project_id: str) -> ProjectRecord | None: ...
+
+    def get_project_by_name(self, grant_id: str, name: str) -> ProjectRecord | None: ...
+
+    def list_projects(self, grant_id: str) -> list[ProjectRecord]: ...
+
+    def sync_from_drive(
+        self,
+        *,
+        grant_id: str,
+        drive_folders: list[DriveFolderRef],
+    ) -> list[ProjectRecord]: ...
+
+    def next_counter(self, grant_id: str, project_id: str, counter_name: str) -> int: ...
 
 
 class ProjectRepository:
@@ -114,6 +156,152 @@ class ProjectRepository:
         return value
 
 
+class FirestoreProjectRepository:
+    def __init__(self, client) -> None:
+        self._client = client
+
+    def create_project(
+        self,
+        *,
+        grant_id: str,
+        name: str,
+        drive_folder_id: str,
+        created_at: datetime | None = None,
+    ) -> ProjectRecord:
+        clean_name = name.strip()
+        transaction = self._client.transaction()
+        index_ref = self._name_index_ref(grant_id, clean_name)
+        index_snapshot = index_ref.get(transaction=transaction)
+        index_data = snapshot_data(index_snapshot)
+        if index_data:
+            project = self.get_project(grant_id, str(index_data["project_id"]))
+            if project is not None:
+                return project
+
+        project_number = next_counter_in_transaction(
+            self._client,
+            transaction,
+            "project",
+            grant_id,
+            "project",
+        )
+        project_id = f"PR-{project_number:06d}"
+        record = ProjectRecord(
+            project_id=project_id,
+            name=clean_name,
+            drive_folder_id=drive_folder_id,
+            created_at=created_at or datetime.now(UTC),
+        )
+        doc_ref = self._project_ref(grant_id, project_id)
+        transaction.set(
+            doc_ref,
+            {
+                **record.model_dump(mode="json"),
+                "grant_id": grant_id,
+                "order": project_number,
+            },
+        )
+        transaction.set(
+            index_ref,
+            {
+                "grant_id": grant_id,
+                "normalized_name": _normalize_name(clean_name),
+                "project_id": project_id,
+                "project_doc_id": self._project_doc_id(grant_id, project_id),
+            },
+        )
+        transaction.commit()
+        return record
+
+    def create_local_project(
+        self,
+        *,
+        grant_id: str,
+        name: str,
+        created_at: datetime | None = None,
+    ) -> ProjectRecord:
+        existing = self.get_project_by_name(grant_id, name)
+        if existing is not None:
+            return existing
+        folder_number = next_counter(
+            self._client,
+            "project",
+            grant_id,
+            "local_folder",
+        )
+        return self.create_project(
+            grant_id=grant_id,
+            name=name,
+            drive_folder_id=f"LOCAL-PROJECT-FOLDER-{folder_number:06d}",
+            created_at=created_at,
+        )
+
+    def get_project(self, grant_id: str, project_id: str) -> ProjectRecord | None:
+        data = snapshot_data(self._project_ref(grant_id, project_id).get())
+        if data is None:
+            return None
+        return _project_from_data(data)
+
+    def get_project_by_name(self, grant_id: str, name: str) -> ProjectRecord | None:
+        data = snapshot_data(self._name_index_ref(grant_id, name).get())
+        if data is None:
+            return None
+        return self.get_project(grant_id, str(data["project_id"]))
+
+    def list_projects(self, grant_id: str) -> list[ProjectRecord]:
+        snapshots = (
+            self._client.collection("projects")
+            .where("grant_id", "==", grant_id)
+            .stream()
+        )
+        rows = [snapshot.to_dict() for snapshot in snapshots]
+        rows.sort(key=lambda row: int(row.get("order", 0)))
+        return [_project_from_data(row) for row in rows]
+
+    def sync_from_drive(
+        self,
+        *,
+        grant_id: str,
+        drive_folders: list[DriveFolderRef],
+    ) -> list[ProjectRecord]:
+        existing_by_folder_id = {
+            project.drive_folder_id: project
+            for project in self.list_projects(grant_id)
+        }
+        for folder in drive_folders:
+            if folder.folder_id in existing_by_folder_id:
+                continue
+            self.create_project(
+                grant_id=grant_id,
+                name=folder.name,
+                drive_folder_id=folder.folder_id,
+                created_at=folder.created_time,
+            )
+        return self.list_projects(grant_id)
+
+    def next_counter(self, grant_id: str, project_id: str, counter_name: str) -> int:
+        return next_counter(
+            self._client,
+            "project",
+            grant_id,
+            project_id,
+            counter_name,
+        )
+
+    def _project_ref(self, grant_id: str, project_id: str):
+        return self._client.collection("projects").document(
+            self._project_doc_id(grant_id, project_id)
+        )
+
+    def _name_index_ref(self, grant_id: str, name: str):
+        return self._client.collection("project_name_index").document(
+            safe_doc_id(grant_id, _name_digest(name))
+        )
+
+    def _project_doc_id(self, grant_id: str, project_id: str) -> str:
+        return safe_doc_id(grant_id, project_id)
+
+
 def validate_project_name(value: str) -> str:
     clean = value.strip()
     if not clean or len(clean) > 80:
@@ -125,6 +313,21 @@ def validate_project_name(value: str) -> str:
 
 def _normalize_name(value: str) -> str:
     return re.sub(r"\s+", " ", value.strip().lower())
+
+
+def _name_digest(value: str) -> str:
+    return sha256(_normalize_name(value).encode("utf-8")).hexdigest()
+
+
+def _project_from_data(data: dict) -> ProjectRecord:
+    return ProjectRecord.model_validate(
+        {
+            "project_id": data["project_id"],
+            "name": data["name"],
+            "drive_folder_id": data["drive_folder_id"],
+            "created_at": data["created_at"],
+        }
+    )
 
 
 _project_repository = ProjectRepository()

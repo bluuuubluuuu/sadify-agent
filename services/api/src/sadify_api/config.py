@@ -18,6 +18,7 @@ class ApiConfig:
     google_oauth_client_id: str = ""
     google_oauth_client_secret_name: str = "sadify-drive-oauth-client-secret"
     drive_live_enabled: bool = False
+    persistence_mode: Literal["memory", "firestore"] = "memory"
 
 
 def load_api_config() -> ApiConfig:
@@ -33,6 +34,9 @@ def load_api_config() -> ApiConfig:
     drive_mode = os.getenv("SADIFY_DRIVE_MODE", "local").strip().lower()
     if drive_mode not in {"local", "live"}:
         drive_mode = "local"
+    persistence_mode = os.getenv("SADIFY_PERSISTENCE", "memory").strip().lower()
+    if persistence_mode not in {"memory", "firestore"}:
+        persistence_mode = "memory"
     drive_folder_name = os.getenv("SADIFY_DRIVE_FOLDER_NAME", "SADify Projects").strip()
     google_oauth_client_id = os.getenv("SADIFY_GOOGLE_OAUTH_CLIENT_ID", "").strip()
     google_oauth_client_secret_name = os.getenv(
@@ -63,6 +67,7 @@ def load_api_config() -> ApiConfig:
             google_oauth_client_secret_name or "sadify-drive-oauth-client-secret"
         ),
         drive_live_enabled=_env_bool("SADIFY_DRIVE_LIVE_ENABLED", default=False),
+        persistence_mode=persistence_mode,
     )
 
 
