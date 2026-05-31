@@ -1,0 +1,55 @@
+/* SADify design tokens — see docs/superpowers/specs/2026-05-31-sadify-ui-redesign-design.md */
+:root {
+  --c-primary: #1e3a5f;
+  --c-on-primary: #ffffff;
+  --c-secondary: #2563eb;
+  --c-accent: #059669;
+  --c-bg: #f8fafc;
+  --c-surface: #ffffff;
+  --c-fg: #0f172a;
+  --c-muted: #f1f3f5;
+  --c-border: #e4e7eb;
+  --c-subtle: #64748b;
+  --c-warn: #fbbf24;
+  --c-warn-bg: #fef9c3;
+  --c-warn-fg: #92400e;
+  --c-danger: #dc2626;
+  --c-success: #059669;
+  --c-success-bg: #ecfdf5;
+  --c-success-border: #a7f3d0;
+  --c-ring: #2563eb;
+
+  --r-sm: 8px;
+  --r-md: 11px;
+  --r-lg: 16px;
+
+  --sh-1: 0 4px 14px rgba(15, 23, 42, 0.08);
+  --sh-2: 0 8px 28px rgba(15, 23, 42, 0.12);
+
+  --fs-body: 16px;
+  --fs-sec: 14px;
+  --fs-label: 12px;
+  --fs-h1: 28px;
+  --fs-h2: 22px;
+  --fs-h3: 18px;
+
+  --fw-body: 400;
+  --fw-medium: 500;
+  --fw-semi: 600;
+  --fw-bold: 700;
+  --fw-x: 800;
+
+  --motion-fast: 180ms;
+  --motion-mid: 250ms;
+  --motion-slow: 450ms;
+  --ease-out: cubic-bezier(0.22, 0.61, 0.36, 1);
+  --ease-spring: cubic-bezier(0.34, 1.3, 0.5, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --motion-fast: 1ms;
+    --motion-mid: 1ms;
+    --motion-slow: 1ms;
+  }
+}

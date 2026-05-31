@@ -1,0 +1,49 @@
+.steps {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.step {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.num {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: var(--c-border);
+  color: var(--c-subtle);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: var(--fw-x);
+  font-size: 12px;
+  transition: background var(--motion-mid), color var(--motion-mid);
+}
+.active {
+  background: var(--c-secondary);
+  color: #fff;
+  box-shadow: 0 4px 12px rgba(37, 99, 235, 0.4);
+}
+.done {
+  background: var(--c-accent);
+  color: #fff;
+}
+.lbl {
+  font-size: 13px;
+  color: var(--c-subtle);
+  font-weight: var(--fw-semi);
+}
+.lblOn {
+  font-size: 13px;
+  color: var(--c-primary);
+  font-weight: var(--fw-bold);
+}
+.bar {
+  width: 22px;
+  height: 2px;
+  background: var(--c-border);
+  border-radius: 2px;
+}

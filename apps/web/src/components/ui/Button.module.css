@@ -1,0 +1,92 @@
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font-family: inherit;
+  font-weight: var(--fw-bold);
+  font-size: var(--fs-sec);
+  border: none;
+  border-radius: var(--r-md);
+  padding: 11px 18px;
+  cursor: pointer;
+  position: relative;
+  overflow: hidden;
+  transition: transform var(--motion-fast) var(--ease-out), box-shadow var(--motion-mid),
+    background var(--motion-fast);
+}
+.btn:active {
+  transform: scale(0.96);
+}
+.btn:disabled {
+  opacity: 0.55;
+  cursor: default;
+  transform: none;
+}
+.primary {
+  background: var(--c-primary);
+  color: var(--c-on-primary);
+  box-shadow: 0 4px 14px rgba(30, 58, 95, 0.28);
+}
+.secondary {
+  background: var(--c-surface);
+  color: var(--c-secondary);
+  box-shadow: inset 0 0 0 1.5px var(--c-secondary);
+}
+.ghost {
+  background: transparent;
+  color: var(--c-subtle);
+}
+.danger {
+  background: transparent;
+  color: var(--c-danger);
+}
+.loading {
+  cursor: progress;
+}
+.spin {
+  width: 16px;
+  height: 16px;
+  border: 2.5px solid rgba(255, 255, 255, 0.4);
+  border-top-color: currentColor;
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+  flex: none;
+}
+.secondary .spin,
+.ghost .spin,
+.danger .spin {
+  border-color: rgba(37, 99, 235, 0.25);
+  border-top-color: currentColor;
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.ripple {
+  position: absolute;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.45);
+  transform: scale(0);
+  animation: ripple 0.6s ease-out;
+  pointer-events: none;
+}
+.secondary .ripple,
+.ghost .ripple {
+  background: rgba(37, 99, 235, 0.18);
+}
+@keyframes ripple {
+  to {
+    transform: scale(2.4);
+    opacity: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .btn:active {
+    transform: none;
+  }
+  .spin {
+    animation: none;
+  }
+}
