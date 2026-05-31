@@ -1,0 +1,63 @@
+.overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 80;
+  padding: 20px;
+}
+.panel {
+  background: var(--c-surface);
+  color: var(--c-fg);
+  border-radius: var(--r-lg);
+  box-shadow: var(--sh-2);
+  padding: 22px;
+  width: min(420px, 100%);
+}
+.eyebrow {
+  font-size: 11px;
+  letter-spacing: 0.5px;
+  font-weight: var(--fw-bold);
+  text-transform: uppercase;
+  color: var(--c-subtle);
+  margin: 0;
+}
+.title {
+  margin: 4px 0 6px;
+  font-size: var(--fs-h3);
+  font-weight: var(--fw-x);
+}
+.desc {
+  margin: 0 0 14px;
+  font-size: var(--fs-sec);
+  color: var(--c-subtle);
+}
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: var(--fs-label);
+  font-weight: var(--fw-semi);
+  color: var(--c-subtle);
+}
+.input {
+  font: inherit;
+  font-size: var(--fs-sec);
+  color: var(--c-fg);
+  background: var(--c-surface);
+  border: 1.5px solid var(--c-border);
+  border-radius: var(--r-sm);
+  padding: 11px 12px;
+}
+.input:focus {
+  outline: none;
+  border-color: var(--c-secondary);
+}
+.actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 18px;
+}
