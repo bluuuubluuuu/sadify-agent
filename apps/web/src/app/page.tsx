@@ -1,6 +1,5 @@
-import { WorkspaceShell } from "../components/WorkspaceShell";
-import { mockWorkspaceState } from "../lib/mockState";
+import { WorkspaceV2 } from "../components/WorkspaceV2";
 
 export default function Home() {
-  return <WorkspaceShell state={mockWorkspaceState} />;
+  return <WorkspaceV2 />;
 }

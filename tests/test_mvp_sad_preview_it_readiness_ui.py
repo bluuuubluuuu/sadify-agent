@@ -7,8 +7,9 @@ WEB_SRC = ROOT / "apps" / "web" / "src"
 
 def test_sad_preview_ui_files_exist():
     expected_paths = [
-        WEB_SRC / "components" / "SadPreviewPanel.tsx",
-        WEB_SRC / "components" / "WorkspaceShell.tsx",
+        WEB_SRC / "lib" / "hooks" / "useSadSave.ts",
+        WEB_SRC / "components" / "preview" / "PreviewPane.tsx",
+        WEB_SRC / "components" / "chat" / "ChatPanel.tsx",
         WEB_SRC / "lib" / "api.ts",
     ]
 
@@ -18,62 +19,32 @@ def test_sad_preview_ui_files_exist():
 
 
 def test_sad_preview_ui_wires_backend_preview_and_user_friendly_sections():
-    shell = (WEB_SRC / "components" / "WorkspaceShell.tsx").read_text(
-        encoding="utf-8"
-    )
+    save = (WEB_SRC / "lib" / "hooks" / "useSadSave.ts").read_text(encoding="utf-8")
+    pane = (WEB_SRC / "components" / "preview" / "PreviewPane.tsx").read_text(encoding="utf-8")
+    chat = (WEB_SRC / "components" / "chat" / "ChatPanel.tsx").read_text(encoding="utf-8")
     api = (WEB_SRC / "lib" / "api.ts").read_text(encoding="utf-8")
-    panel = (WEB_SRC / "components" / "SadPreviewPanel.tsx").read_text(
-        encoding="utf-8"
-    )
 
-    assert "SadPreviewPanel" in shell
     assert "generateSadPreview" in api
     assert "/sad/preview" in api
-    assert "Generate SAD preview" in panel
-    assert "Temporary preview" in panel
-    assert "Later IT readiness" not in panel
-    assert "Deeper implementation check" not in panel
-    assert "Assumptions" in panel
-    assert "Open questions" in panel
-    assert "Source refs" in panel
-    assert "Tracking status" in panel
+    assert "generateSadPreview" in save
+    assert "Generate SAD preview" in chat
+    assert "Draft-ready" in pane
+    assert "Temporary — not saved yet" in pane
+    assert "Assumptions we made" in pane
+    assert "Questions to confirm with the business" in pane
 
 
-def test_sad_preview_ui_hides_fallback_diagnostics_from_normal_view():
-    panel = (WEB_SRC / "components" / "SadPreviewPanel.tsx").read_text(
-        encoding="utf-8"
-    )
+def test_sad_preview_ui_keeps_it_readiness_collapsed_and_business_first():
+    pane = (WEB_SRC / "components" / "preview" / "PreviewPane.tsx").read_text(encoding="utf-8")
 
-    assert "Draft-ready" in panel
-    assert "Layer 1 preview" in panel
-    assert "Later implementation review" in panel
-    assert "Tracking status" in panel
-    assert "AI preview formatting" not in panel
-    assert "Generated safe local preview" not in panel
+    assert "Review readiness checklist" in pane
+    assert "isDraftReady" in pane
+    assert "it_readiness.checklist" in pane
 
 
-def test_sad_preview_ui_keeps_valid_preview_it_readiness_and_source_refs_collapsed():
-    panel = (WEB_SRC / "components" / "SadPreviewPanel.tsx").read_text(
-        encoding="utf-8"
-    )
+def test_sad_preview_state_resets_when_analysis_changes():
+    save = (WEB_SRC / "lib" / "hooks" / "useSadSave.ts").read_text(encoding="utf-8")
 
-    assert "isDraftReadyPreview" in panel
-    assert '<details className="it-readiness">' in panel
-    assert "!isFallbackPreview && section.source_references.length > 0" not in panel
-    assert "Draft-ready" in panel
-    assert "Layer 1 preview" in panel
-
-
-def test_sad_preview_ui_resets_stale_preview_and_hides_internal_tracking_paths():
-    panel = (WEB_SRC / "components" / "SadPreviewPanel.tsx").read_text(
-        encoding="utf-8"
-    )
-
-    assert "useEffect" in panel
-    assert "setPreviewResponse(null)" in panel
-    assert (
-        'setMessage("Temporary preview only. No Google Doc or Drive file is saved here.")'
-        in panel
-    )
-    assert 'path.startsWith("_SADify/")' in panel
-    assert "Temporary draft state saved." in panel
+    assert "useEffect" in save
+    assert "setPreviewResponse(null)" in save
+    assert "analysisId" in save
