@@ -182,6 +182,16 @@ export function useQnA({
   const hasSelectedAnswer =
     selectedChoiceIds.length > 0 && (!isOtherSelected || amendmentText.trim().length > 0);
 
+  function reset() {
+    setAnalysisResponse(null);
+    setRequirementText(DEFAULT_REQUIREMENT);
+    setCleanRequirementText(DEFAULT_REQUIREMENT);
+    setSelectedChoiceIds([]);
+    setAmendmentText("");
+    setAnswerHistory([]);
+    setMessage("No project files are written by this step.");
+  }
+
   function toggleChoice(choiceId: string) {
     const choice = analysis?.next_question.choices.find(
       (candidate) => candidate.id === choiceId,
@@ -220,6 +230,7 @@ export function useQnA({
     startAnalysis,
     continueWithAnswer,
     toggleChoice,
+    reset,
   };
 }
 

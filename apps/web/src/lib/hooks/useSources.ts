@@ -53,8 +53,16 @@ export function useSources(onChange?: (response: SourceUploadResponse | null) =>
     await uploadAll(next);
   }
 
+  function reset() {
+    setFiles([]);
+    setResponse(null);
+    onChange?.(null);
+    setMessage("");
+  }
+
   return {
     files,
+    reset,
     sources: response?.sources ?? [],
     errors: response?.errors ?? [],
     analysisContext: response?.analysis_context ?? "",
