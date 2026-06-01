@@ -2,6 +2,7 @@
 
 import { type KeyboardEvent, type ReactNode } from "react";
 import { Icon } from "../ui/Icon";
+import { AutoTextarea } from "../ui/AutoTextarea";
 import styles from "./chat.module.css";
 
 export function Composer({
@@ -49,9 +50,9 @@ export function Composer({
             <Icon name="paperclip" size={18} />
           </button>
         ) : null}
-        <textarea
+        <AutoTextarea
           className={styles.input}
-          rows={1}
+          maxHeight={200}
           value={value}
           placeholder={placeholder ?? "Type your answer…"}
           disabled={disabled}

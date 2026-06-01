@@ -16,6 +16,7 @@ import { ConnectDriveBanner } from "./shell/ConnectDriveBanner";
 import { ChatPanel } from "./chat/ChatPanel";
 import { ReadinessPane, PreviewPlaceholder } from "./chat/ReadinessPane";
 import { AttachChips } from "./chat/AttachChips";
+import { AutoTextarea } from "./ui/AutoTextarea";
 import { Button } from "./ui/Button";
 import { Icon } from "./ui/Icon";
 
@@ -260,11 +261,19 @@ function StartBox({
           >
             <Icon name="paperclip" size={18} />
           </button>
-          <textarea
+          <AutoTextarea
             value={value}
-            rows={2}
+            maxHeight={200}
             placeholder="e.g. We manage grooming appointments from booking to pickup."
             onChange={(event) => onChange(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && !event.shiftKey) {
+                event.preventDefault();
+                if (value.trim().length >= 5 && !busy) {
+                  onStart();
+                }
+              }
+            }}
             style={{
               flex: 1,
               font: "inherit",

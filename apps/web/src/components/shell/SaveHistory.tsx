@@ -25,14 +25,14 @@ export function SaveHistory({
     <ul className={styles.histList}>
       {saves.map((save) => (
         <li key={`${save.preview_id}-${save.save_id}`} className={styles.histRow}>
-          <Icon name="fileText" size={16} color="#fff" />
-          <span>{save.save_id}</span>
-          <span className={styles.histTime}>{formatSavedAt(save.created_at)}</span>
+          <Icon name="fileText" size={15} color="#fff" className={styles.histIcon} />
+          <span className={styles.histId}>{save.save_id}</span>
           {save.doc_url ? (
             <a className={styles.histOpen} href={save.doc_url} target="_blank" rel="noreferrer">
               Open
             </a>
           ) : null}
+          <span className={styles.histTime}>{formatSavedAt(save.created_at)}</span>
         </li>
       ))}
     </ul>
