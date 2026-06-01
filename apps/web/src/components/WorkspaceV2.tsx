@@ -2,7 +2,12 @@
 
 import { onAuthStateChanged } from "firebase/auth";
 import { useEffect, useRef, useState } from "react";
-import { getDriveRepoStatus, type DriveRepoRecord, type SourceRecord } from "../lib/api";
+import {
+  getDriveRepoStatus,
+  type CreateProjectResponse,
+  type DriveRepoRecord,
+  type SourceRecord,
+} from "../lib/api";
 import { getFirebaseAuth } from "../lib/firebaseClient";
 import { isFirebaseConfigured } from "../lib/firebaseConfig";
 import { deriveStage } from "../lib/stage";
@@ -10,11 +15,15 @@ import { useAuth } from "../lib/hooks/useAuth";
 import { useDriveRepo } from "../lib/hooks/useDriveRepo";
 import { useSources } from "../lib/hooks/useSources";
 import { useQnA } from "../lib/hooks/useQnA";
+import { useSadSave } from "../lib/hooks/useSadSave";
 import { AppShell } from "./shell/AppShell";
 import { Sidebar } from "./shell/Sidebar";
 import { ConnectDriveBanner } from "./shell/ConnectDriveBanner";
+import { CreateProjectDialog } from "./shell/CreateProjectDialog";
 import { ChatPanel } from "./chat/ChatPanel";
 import { ReadinessPane, PreviewPlaceholder } from "./chat/ReadinessPane";
+import { PreviewPane } from "./preview/PreviewPane";
+import { WikiDialog } from "./preview/WikiDialog";
 import { AttachChips } from "./chat/AttachChips";
 import { AutoTextarea } from "./ui/AutoTextarea";
 import { Button } from "./ui/Button";
@@ -29,7 +38,7 @@ import { Icon } from "./ui/Icon";
 export function WorkspaceV2() {
   const auth = useAuth();
   const [driveRepo, setDriveRepo] = useState<DriveRepoRecord | null>(null);
-  const [historyRefreshKey] = useState(0);
+  const [historyRefreshKey, setHistoryRefreshKey] = useState(0);
   const [analysisSessionId, setAnalysisSessionId] = useState(() => crypto.randomUUID());
   const [startText, setStartText] = useState("");
 
@@ -40,6 +49,32 @@ export function WorkspaceV2() {
     sourceReferences: sources.sourceReferences,
     analysisSessionId,
     onAnalysisSaved: () => {},
+  });
+
+  function handleProjectCreated(response: CreateProjectResponse) {
+    setDriveRepo((current) => {
+      if (!current) {
+        return current;
+      }
+      const others = current.available_projects.filter(
+        (project) => project.project_id !== response.project.project_id,
+      );
+      return {
+        ...current,
+        active_project_id: response.active_project_id,
+        active_project_name: response.project.name,
+        available_projects: [...others, response.project],
+      };
+    });
+  }
+
+  const sadSave = useSadSave({
+    requirementText: qna.requirementText,
+    analysisResponse: qna.analysisResponse,
+    sourceContext: sources.analysisContext,
+    sourceReferences: sources.sourceReferences,
+    onProjectCreated: handleProjectCreated,
+    onHistoryRefresh: () => setHistoryRefreshKey((key) => key + 1),
   });
 
   // Preserve WorkspaceShell: fetch Drive status when a user is present.
@@ -72,7 +107,7 @@ export function WorkspaceV2() {
   const stage = deriveStage({
     hasAnalysis: Boolean(qna.analysis),
     readinessScore,
-    hasPreview: false,
+    hasPreview: sadSave.hasPreview,
   });
   const connected = Boolean(driveRepo && !driveRepo.saves_blocked);
 
@@ -99,7 +134,8 @@ export function WorkspaceV2() {
       attaching={sources.isBusy}
       onAttachAdd={(files) => sources.add(files)}
       onAttachRemove={(name) => sources.remove(name)}
-      onGenerate={() => undefined}
+      generating={sadSave.generating}
+      onGenerate={() => sadSave.generate()}
       banner={
         !connected ? <ConnectDriveBanner onConnect={() => driveActions.connect()} /> : undefined
       }
@@ -122,7 +158,21 @@ export function WorkspaceV2() {
   );
 
   const preview =
-    stage === "clarify" && qna.analysis ? (
+    sadSave.hasPreview && sadSave.preview ? (
+      <PreviewPane
+        preview={sadSave.preview}
+        record={sadSave.record}
+        isDraftReady={readinessScore >= 90}
+        canUpdateWiki={sadSave.canUpdateWiki}
+        isSaving={sadSave.isSaving}
+        isWikiBusy={sadSave.isWikiBusy}
+        saveMessage={sadSave.saveMessage}
+        wikiMessage={sadSave.wikiMessage}
+        onSave={() => sadSave.save()}
+        onUpdateWiki={() => sadSave.updateWiki()}
+        onRefine={() => sadSave.dismissPreview()}
+      />
+    ) : stage === "clarify" && qna.analysis ? (
       <ReadinessPane
         score={readinessScore}
         label={qna.analysis.readiness.label}
@@ -135,13 +185,31 @@ export function WorkspaceV2() {
     );
 
   return (
-    <AppShell
-      stage={stage}
-      sidebar={sidebar}
-      chat={chat}
-      preview={preview}
-      previewLabel={`Preview ${readinessScore}%`}
-    />
+    <>
+      <AppShell
+        stage={stage}
+        sidebar={sidebar}
+        chat={chat}
+        preview={preview}
+        previewLabel={`Preview ${readinessScore}%`}
+      />
+      {sadSave.wikiDialogOpen && sadSave.wikiPreview ? (
+        <WikiDialog
+          preview={sadSave.wikiPreview}
+          isBusy={sadSave.isWikiBusy}
+          onConfirm={(force) => sadSave.confirmWiki(force)}
+          onCancel={sadSave.cancelWiki}
+        />
+      ) : null}
+      {sadSave.projectDialogOpen ? (
+        <CreateProjectDialog
+          suggestedName={sadSave.suggestProjectName()}
+          isBusy={sadSave.isProjectBusy}
+          onSubmit={(name) => sadSave.createProjectForPending(name)}
+          onCancel={sadSave.cancelProject}
+        />
+      ) : null}
+    </>
   );
 }
 
