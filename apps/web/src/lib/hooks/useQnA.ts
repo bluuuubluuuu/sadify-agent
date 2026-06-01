@@ -165,7 +165,7 @@ export function useQnA({
   const isQuestionnaireReady =
     Boolean(questionnaire) &&
     (questionnaire?.draft_readiness.score === 100 || unresolvedCategories.length === 0);
-  const selectionMode =
+  const selectionMode: "single" | "multiple" =
     analysis?.next_question.selection_mode === "multiple" ? "multiple" : "single";
   const selectedChoices =
     analysis?.next_question.choices.filter((choice) =>

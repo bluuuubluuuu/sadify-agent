@@ -1,0 +1,128 @@
+.pane {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  background: var(--c-surface);
+  height: 100%;
+  overflow-y: auto;
+}
+.title {
+  font-size: 10px;
+  font-weight: var(--fw-bold);
+  letter-spacing: 0.5px;
+  color: var(--c-subtle);
+  text-transform: uppercase;
+}
+.ringBox {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.ring {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+}
+.ringInner {
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  background: var(--c-surface);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  font-weight: var(--fw-x);
+  color: var(--c-primary);
+}
+.rmeta b {
+  font-size: 13px;
+  color: var(--c-fg);
+  display: block;
+}
+.rmeta span.sub {
+  font-size: 11px;
+  color: var(--c-subtle);
+}
+.conf {
+  font-size: 9.5px;
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-weight: var(--fw-bold);
+  display: inline-block;
+  margin-top: 3px;
+}
+.confLow {
+  background: #fee2e2;
+  color: #991b1b;
+}
+.confMedium {
+  background: #fef3c7;
+  color: #92400e;
+}
+.confHigh {
+  background: #dcfce7;
+  color: #166534;
+}
+.coverage {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.cov {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  font-size: 12.5px;
+  color: #334155;
+}
+.covMiss {
+  color: #94a3b8;
+}
+.summary {
+  background: var(--c-bg);
+  border: 1px solid var(--c-border);
+  border-radius: 10px;
+  padding: 10px;
+}
+.summary summary {
+  font-size: 11px;
+  font-weight: var(--fw-bold);
+  color: var(--c-primary);
+  cursor: pointer;
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.summary p {
+  margin: 6px 0 0;
+  font-size: 11.5px;
+  color: var(--c-subtle);
+  line-height: 1.5;
+}
+.placeholder {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  height: 100%;
+  text-align: center;
+  color: var(--c-subtle);
+  font-size: 12px;
+  padding: 20px;
+}
+.phBox {
+  width: 54px;
+  height: 54px;
+  border-radius: 14px;
+  background: var(--c-muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
