@@ -241,6 +241,8 @@ function StartBox({
     <div
       style={{
         flex: 1,
+        minHeight: 0,
+        overflowY: "auto",
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
