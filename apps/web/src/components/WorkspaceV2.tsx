@@ -1,8 +1,8 @@
 "use client";
 
 import { onAuthStateChanged } from "firebase/auth";
-import { useEffect, useState } from "react";
-import { getDriveRepoStatus, type DriveRepoRecord } from "../lib/api";
+import { useEffect, useRef, useState } from "react";
+import { getDriveRepoStatus, type DriveRepoRecord, type SourceRecord } from "../lib/api";
 import { getFirebaseAuth } from "../lib/firebaseClient";
 import { isFirebaseConfigured } from "../lib/firebaseConfig";
 import { deriveStage } from "../lib/stage";
@@ -15,6 +15,7 @@ import { Sidebar } from "./shell/Sidebar";
 import { ConnectDriveBanner } from "./shell/ConnectDriveBanner";
 import { ChatPanel } from "./chat/ChatPanel";
 import { ReadinessPane, PreviewPlaceholder } from "./chat/ReadinessPane";
+import { AttachChips } from "./chat/AttachChips";
 import { Button } from "./ui/Button";
 import { Icon } from "./ui/Icon";
 
@@ -78,7 +79,6 @@ export function WorkspaceV2() {
     <Sidebar
       displayName={auth.displayName}
       email={auth.email}
-      isSignedIn={auth.isSignedIn}
       repo={driveRepo}
       onRepoChanged={setDriveRepo}
       historyRefreshKey={historyRefreshKey}
@@ -108,6 +108,10 @@ export function WorkspaceV2() {
       value={startText}
       busy={qna.isBusy}
       isSignedIn={auth.isSignedIn}
+      sources={sources.sources}
+      attaching={sources.isBusy}
+      onAttachAdd={(files) => sources.add(files)}
+      onAttachRemove={(name) => sources.remove(name)}
       onChange={setStartText}
       onStart={() => qna.startAnalysis(startText)}
       onSignIn={() => {
@@ -144,6 +148,10 @@ function StartBox({
   value,
   busy,
   isSignedIn,
+  sources,
+  attaching,
+  onAttachAdd,
+  onAttachRemove,
   onChange,
   onStart,
   onSignIn,
@@ -151,10 +159,15 @@ function StartBox({
   value: string;
   busy: boolean;
   isSignedIn: boolean;
+  sources: SourceRecord[];
+  attaching: boolean;
+  onAttachAdd: (files: File[]) => void;
+  onAttachRemove: (fileName: string) => void;
   onChange: (value: string) => void;
   onStart: () => void;
   onSignIn: () => void;
 }) {
+  const fileRef = useRef<HTMLInputElement>(null);
   return (
     <div
       style={{
@@ -195,22 +208,76 @@ function StartBox({
         <p style={{ margin: 0, fontSize: 13, color: "var(--c-subtle)" }}>
           Describe the problem in plain words — SADify asks a few questions, then drafts the SAD.
         </p>
-        <textarea
-          value={value}
-          rows={3}
-          placeholder="e.g. We manage grooming appointments from booking to pickup."
-          onChange={(event) => onChange(event.target.value)}
-          style={{
-            font: "inherit",
-            fontSize: 14,
-            color: "var(--c-fg)",
-            background: "var(--c-surface)",
-            border: "2px solid var(--c-secondary)",
-            borderRadius: 13,
-            padding: 13,
-            resize: "none",
+        <input
+          ref={fileRef}
+          type="file"
+          multiple
+          accept=".md,.markdown,.txt,.pdf,.docx,.xlsx,.csv"
+          style={{ display: "none" }}
+          onChange={(event) => {
+            const files = Array.from(event.target.files ?? []);
+            if (files.length) {
+              onAttachAdd(files);
+            }
+            event.target.value = "";
           }}
         />
+        <AttachChips
+          sources={sources}
+          busy={attaching}
+          onRemove={onAttachRemove}
+          onAdd={() => fileRef.current?.click()}
+        />
+        <div
+          style={{
+            display: "flex",
+            gap: 10,
+            alignItems: "flex-end",
+            border: "2px solid var(--c-secondary)",
+            borderRadius: 13,
+            background: "var(--c-surface)",
+            padding: 10,
+          }}
+        >
+          <button
+            type="button"
+            aria-label="Attach files"
+            disabled={attaching}
+            onClick={() => fileRef.current?.click()}
+            style={{
+              width: 36,
+              height: 36,
+              borderRadius: 9,
+              background: "var(--c-muted)",
+              border: "1px solid var(--c-border)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              flex: "none",
+              cursor: "pointer",
+              color: "var(--c-primary)",
+            }}
+          >
+            <Icon name="paperclip" size={18} />
+          </button>
+          <textarea
+            value={value}
+            rows={2}
+            placeholder="e.g. We manage grooming appointments from booking to pickup."
+            onChange={(event) => onChange(event.target.value)}
+            style={{
+              flex: 1,
+              font: "inherit",
+              fontSize: 14,
+              color: "var(--c-fg)",
+              background: "transparent",
+              border: "none",
+              resize: "none",
+              outline: "none",
+              textAlign: "left",
+            }}
+          />
+        </div>
         <Button
           variant="primary"
           loading={busy}

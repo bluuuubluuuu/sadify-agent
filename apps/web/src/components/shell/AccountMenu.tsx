@@ -9,12 +9,14 @@ export function AccountMenu({
   name,
   email,
   repo,
+  onConnect,
   onDisconnect,
   onSignOut,
 }: {
   name: string | null;
   email: string | null;
   repo: DriveRepoRecord | null;
+  onConnect: () => void;
   onDisconnect: () => void;
   onSignOut: () => void;
 }) {
@@ -40,7 +42,7 @@ export function AccountMenu({
         aria-expanded={open}
       >
         <span className={styles.avatar}>{initials}</span>
-        <span style={{ minWidth: 0 }}>
+        <span style={{ minWidth: 0, flex: 1 }}>
           <span className={styles.acctName} style={{ display: "block" }}>
             {name ?? "Guest"}
           </span>
@@ -50,6 +52,16 @@ export function AccountMenu({
             </span>
           ) : null}
         </span>
+        {name || email ? (
+          <span className={`${styles.acctChip} ${connected ? styles.acctChipOn : styles.acctChipOff}`}>
+            <Icon
+              name={connected ? "cloudCheck" : "circle"}
+              size={12}
+              color={connected ? "#a7f3d0" : "#fde68a"}
+            />
+            {connected ? "Drive" : "Connect"}
+          </span>
+        ) : null}
       </button>
 
       {open ? (
@@ -94,10 +106,18 @@ export function AccountMenu({
               </button>
             </>
           ) : (
-            <div className={styles.mRow}>
-              <Icon name="circle" size={18} color="var(--c-subtle)" />
-              Not connected
-            </div>
+            <button
+              type="button"
+              className={styles.mRow}
+              role="menuitem"
+              onClick={() => {
+                setOpen(false);
+                onConnect();
+              }}
+            >
+              <Icon name="cloudCheck" size={18} color="var(--c-subtle)" />
+              Connect Google Drive
+            </button>
           )}
           <div className={styles.sep} />
           <button

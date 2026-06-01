@@ -7,7 +7,6 @@ import { useProjects } from "../../lib/hooks/useProjects";
 import { useSaveHistory } from "../../lib/hooks/useSaveHistory";
 import { Icon } from "../ui/Icon";
 import { Button } from "../ui/Button";
-import { SetupChecklist } from "./SetupChecklist";
 import { ProjectList } from "./ProjectList";
 import { SaveHistory } from "./SaveHistory";
 import { AccountMenu } from "./AccountMenu";
@@ -17,7 +16,6 @@ import styles from "./Sidebar.module.css";
 export function Sidebar({
   displayName,
   email,
-  isSignedIn,
   repo,
   onRepoChanged,
   historyRefreshKey,
@@ -26,7 +24,6 @@ export function Sidebar({
 }: {
   displayName: string | null;
   email: string | null;
-  isSignedIn: boolean;
   repo: DriveRepoRecord | null;
   onRepoChanged: (repo: DriveRepoRecord | null) => void;
   historyRefreshKey: number;
@@ -37,7 +34,6 @@ export function Sidebar({
   const projectsHook = useProjects(repo, onRepoChanged);
   const history = useSaveHistory(repo?.active_project_id ?? null, historyRefreshKey);
   const [dialogOpen, setDialogOpen] = useState(false);
-  const connected = Boolean(repo && !repo.saves_blocked);
 
   async function handleCreate(name: string) {
     await projectsHook.create(name);
@@ -60,14 +56,6 @@ export function Sidebar({
         New SAD
       </Button>
 
-      <div className={styles.label}>Setup</div>
-      <SetupChecklist
-        isSignedIn={isSignedIn}
-        connected={connected}
-        repoName={repo?.repo_folder_name}
-        onConnectDrive={() => drive.connect()}
-      />
-
       {repo ? (
         <>
           <div className={styles.label}>Projects</div>
@@ -86,6 +74,7 @@ export function Sidebar({
         name={displayName}
         email={email}
         repo={repo}
+        onConnect={() => drive.connect()}
         onDisconnect={() => drive.disconnect()}
         onSignOut={onSignOut}
       />
