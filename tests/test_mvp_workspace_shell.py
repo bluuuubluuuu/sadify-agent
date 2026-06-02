@@ -33,6 +33,33 @@ def test_workspace_v2_composes_shell_chat_preview():
     assert "data-stage" in app_shell
 
 
+def test_readiness_pane_binds_stable_questionnaire_state_not_raw():
+    # Regression guard (A+B): the coverage list and the readiness
+    # label/confidence must read the stable questionnaire state when it
+    # exists, not the raw per-turn Gemini/fallback fields. Raw categories
+    # are unratcheted (flicker) and raw readiness is "Fallback question
+    # ready"/Low even at 92-100%.
+    shell = (WEB_SRC / "components" / "WorkspaceV2.tsx").read_text(encoding="utf-8")
+
+    assert "qna.analysis.questionnaire?.categories ?? qna.analysis.categories" in shell
+    assert (
+        "qna.analysis.questionnaire?.draft_readiness.label ?? qna.analysis.readiness.label"
+        in shell
+    )
+    assert "qna.analysis.questionnaire?.draft_readiness.confidence" in shell
+
+
+def test_coverage_checklist_maps_questionnaire_statuses():
+    coverage = (WEB_SRC / "components" / "chat" / "CoverageChecklist.tsx").read_text(
+        encoding="utf-8"
+    )
+
+    for status in ("ready", "in_progress", "needed", "needs_later_confirmation"):
+        assert f'"{status}"' in coverage
+    assert "not_applicable" in coverage
+    assert "clock" in coverage
+
+
 def test_scrollbars_use_light_workspace_tone():
     globals_css = (WEB_SRC / "app" / "globals.css").read_text(encoding="utf-8")
 

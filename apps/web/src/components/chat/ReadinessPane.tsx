@@ -1,14 +1,8 @@
 "use client";
 
 import { Icon } from "../ui/Icon";
-import { CoverageChecklist } from "./CoverageChecklist";
+import { CoverageChecklist, type CoverageCategory } from "./CoverageChecklist";
 import styles from "./ReadinessPane.module.css";
-
-type Category = {
-  id: string;
-  label: string;
-  status: "complete" | "partial" | "missing";
-};
 
 export function ReadinessPane({
   score,
@@ -20,7 +14,7 @@ export function ReadinessPane({
   score: number;
   label: string;
   confidence: "Low" | "Medium" | "High";
-  categories: Category[];
+  categories: CoverageCategory[];
   understandingSummary: string;
 }) {
   const confClass =

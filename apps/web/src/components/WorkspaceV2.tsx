@@ -176,9 +176,12 @@ export function WorkspaceV2() {
     ) : stage === "clarify" && qna.analysis ? (
       <ReadinessPane
         score={readinessScore}
-        label={qna.analysis.readiness.label}
-        confidence={qna.analysis.readiness.confidence}
-        categories={qna.analysis.categories}
+        label={qna.analysis.questionnaire?.draft_readiness.label ?? qna.analysis.readiness.label}
+        confidence={
+          qna.analysis.questionnaire?.draft_readiness.confidence ??
+          qna.analysis.readiness.confidence
+        }
+        categories={qna.analysis.questionnaire?.categories ?? qna.analysis.categories}
         understandingSummary={qna.analysis.understanding_summary}
       />
     ) : (
