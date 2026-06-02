@@ -25,6 +25,10 @@ exports/
 node_modules/
 .npm/
 .pnpm-store/
+# Frontend + non-API trees: the backend image only needs services/api/src + src
+apps/
+tests/
+sadify_agent/
 .streamlit/secrets.toml
 CLAUDE.md
 context.md
