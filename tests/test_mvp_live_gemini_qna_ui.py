@@ -66,6 +66,10 @@ def test_qna_choices_and_chat_render_question_flow():
     assert "Generate SAD preview" in chat
     assert "All required areas confirmed" in chat
     assert "What I understand so far" in readiness
+    # D-wording (D-093): badge reads as evidence-grounding, not "confidence",
+    # so high % + low grounding stops looking contradictory.
+    assert "{confidence} evidence" in readiness
+    assert "grounded in your uploaded source" in readiness
 
 
 def test_api_ts_sends_analysis_session_id():

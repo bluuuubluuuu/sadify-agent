@@ -155,7 +155,7 @@ export function PreviewPane({
         ) : null}
 
         <details className={styles.checklist}>
-          <summary>Review readiness checklist</summary>
+          <summary>Implementation review (separate from draft readiness)</summary>
           <div className={styles.check}>
             {preview.it_readiness.checklist.map((item) => (
               <article key={item.id}>

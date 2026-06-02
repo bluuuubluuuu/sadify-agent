@@ -37,7 +37,7 @@ def test_sad_preview_ui_wires_backend_preview_and_user_friendly_sections():
 def test_sad_preview_ui_keeps_it_readiness_collapsed_and_business_first():
     pane = (WEB_SRC / "components" / "preview" / "PreviewPane.tsx").read_text(encoding="utf-8")
 
-    assert "Review readiness checklist" in pane
+    assert "Implementation review (separate from draft readiness)" in pane
     assert "isDraftReady" in pane
     assert "it_readiness.checklist" in pane
 

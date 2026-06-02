@@ -36,7 +36,12 @@ export function ReadinessPane({
         </div>
         <div className={styles.rmeta}>
           <b>{label}</b>
-          <span className={`${styles.conf} ${confClass}`}>{confidence} confidence</span>
+          <span
+            className={`${styles.conf} ${confClass}`}
+            title="How well your answers are grounded in your uploaded source"
+          >
+            {confidence} evidence
+          </span>
         </div>
       </div>
 
