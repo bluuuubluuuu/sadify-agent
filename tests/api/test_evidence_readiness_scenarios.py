@@ -110,3 +110,26 @@ def test_scenario_5_not_applicable_category_not_penalised():
     baseline = _readiness(all_strong, "Everything covered.")
     na_case = _readiness(with_na, "No integrations needed.")
     assert na_case["score"] >= baseline["score"] - 1
+
+
+def test_scenario_ready_for_draft_can_coexist_with_low_confidence():
+    # TC-031 case D: 90%+/"Ready for draft" with Low confidence is expected
+    # (not a bug) when >=2 strong verdicts cite quotes absent from the
+    # material, so they are downgraded -- the monotonic score still clears 90
+    # while confidence is forced Low by downgrade_count>=2.
+    slots = canonical_required_slots()
+    verdicts = [_verdict(c, s, "strong") for c, s, _ in slots]
+    for verdict in verdicts[:2]:
+        verdict["evidence_quote"] = "phrase that is absent from the material"
+    response = _client(verdicts).post(
+        "/analysis/requirement",
+        json={"requirement_text": f"Fully detailed request.\n{EVIDENCE_ANCHOR}"},
+    )
+    assert response.status_code == 200
+    questionnaire = response.json()["analysis"]["questionnaire"]
+    readiness = questionnaire["draft_readiness"]
+    assert readiness["score"] >= 90
+    assert readiness["label"] == "Ready for draft"
+    assert readiness["confidence"] == "Low"
+    downgrades = [line for line in questionnaire["diagnostics"] if "downgraded" in line]
+    assert len(downgrades) >= 2

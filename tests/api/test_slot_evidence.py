@@ -130,6 +130,26 @@ def test_derive_confidence_low_when_two_or_more_downgrades():
     assert derive_confidence(verdicts, downgrade_count=2) == "Low"
 
 
+def test_derive_confidence_medium_when_partial_heavy_no_downgrades():
+    # TC-031 case C2: a partial-heavy mix (few strong, few none, no downgrades)
+    # is Medium, not Low. Proves Low at a high score specifically requires
+    # >=2 downgrades or none>half -- partial evidence alone yields Medium.
+    verdicts = [_verdict("c", f"s{i}", "partial", "q") for i in range(8)]
+    verdicts.append(_verdict("c", "s8", "strong", "q"))
+    verdicts.append(_verdict("c", "s9", "none"))
+    assert derive_confidence(verdicts, downgrade_count=0) == "Medium"
+
+
+def test_derive_confidence_oscillates_with_downgrade_count_on_same_verdicts():
+    # TC-031 case D2: with the verdict mix (and thus the score basis) held
+    # constant, confidence flips High<->Low purely on this-turn
+    # downgrade_count. Confirms confidence volatility is independent of the
+    # monotonic score, which is locked separately by the merge_evidence tests.
+    verdicts = [_verdict("c", f"s{i}", "strong", "q") for i in range(10)]
+    assert derive_confidence(verdicts, downgrade_count=2) == "Low"
+    assert derive_confidence(verdicts, downgrade_count=0) == "High"
+
+
 def test_evidence_map_keys_by_category_and_slot():
     mapping = evidence_map(
         [_verdict("goal_scope", "business_goal", "strong", "q")]
