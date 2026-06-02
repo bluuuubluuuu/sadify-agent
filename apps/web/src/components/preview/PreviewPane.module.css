@@ -44,6 +44,11 @@
   color: var(--c-warn-fg);
   border: 1px solid #fde68a;
 }
+.wikiDone {
+  background: #e8fff7;
+  color: var(--c-success);
+  border: 1px solid var(--c-success-border);
+}
 .doc {
   flex: 1;
   overflow-y: auto;
@@ -144,6 +149,24 @@
   display: block;
 }
 .success span {
+  font-size: 11px;
+  color: #475569;
+}
+.wikiSuccess {
+  background: #f0fdf4;
+  border: 1px solid var(--c-success-border);
+  border-radius: 10px;
+  padding: 11px 13px;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+.wikiSuccess b {
+  font-size: 12.5px;
+  color: var(--c-success);
+  display: block;
+}
+.wikiSuccess span {
   font-size: 11px;
   color: #475569;
 }

@@ -28,7 +28,14 @@ export function SaveHistory({
           <Icon name="fileText" size={15} color="#fff" className={styles.histIcon} />
           <span className={styles.histId}>{save.save_id}</span>
           {save.doc_url ? (
-            <a className={styles.histOpen} href={save.doc_url} target="_blank" rel="noreferrer">
+            <a
+              className={styles.histOpen}
+              href={save.doc_url}
+              target="_blank"
+              rel="noreferrer"
+              aria-label={`Open SAD doc ${save.save_id}`}
+              title={`Open SAD doc ${save.save_id}`}
+            >
               Open
             </a>
           ) : null}

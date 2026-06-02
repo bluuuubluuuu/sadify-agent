@@ -1,6 +1,6 @@
 "use client";
 
-import type { SadPreviewResponse, SadSaveRecord } from "../../lib/api";
+import type { SadPreviewResponse, SadSaveRecord, WikiUpdateResponse } from "../../lib/api";
 import { Icon } from "../ui/Icon";
 import { Button } from "../ui/Button";
 import styles from "./PreviewPane.module.css";
@@ -14,6 +14,7 @@ const READINESS_LABEL: Record<string, string> = {
 export function PreviewPane({
   preview,
   record,
+  wikiRecord,
   isDraftReady,
   canUpdateWiki,
   isSaving,
@@ -26,6 +27,7 @@ export function PreviewPane({
 }: {
   preview: SadPreviewResponse;
   record: SadSaveRecord | null;
+  wikiRecord: WikiUpdateResponse | null;
   isDraftReady: boolean;
   canUpdateWiki: boolean;
   isSaving: boolean;
@@ -54,6 +56,12 @@ export function PreviewPane({
               Temporary — not saved yet
             </span>
           ) : null}
+          {wikiRecord ? (
+            <span className={`${styles.pill} ${styles.wikiDone}`}>
+              <Icon name="checkCircle" size={13} color="var(--c-success)" />
+              Wiki updated
+            </span>
+          ) : null}
         </div>
       </div>
 
@@ -76,6 +84,33 @@ export function PreviewPane({
               >
                 <Icon name="openExternal" size={13} color="var(--c-primary)" />
                 Open in Drive
+              </a>
+            ) : null}
+          </div>
+        ) : null}
+
+        {wikiRecord ? (
+          <div className={styles.wikiSuccess}>
+            <Icon name="book" size={18} color="var(--c-success)" />
+            <span>
+              <b>Wiki updated</b>
+              <span>
+                {wikiRecord.files.length} file{wikiRecord.files.length === 1 ? "" : "s"} updated
+                {" - "}
+                {wikiRecord.backup.created
+                  ? `Backup: ${wikiRecord.backup.path}`
+                  : "No backup needed"}
+              </span>
+            </span>
+            {wikiRecord.files[0]?.web_view_link ? (
+              <a
+                className={styles.openDoc}
+                href={wikiRecord.files[0].web_view_link}
+                target="_blank"
+                rel="noreferrer"
+              >
+                <Icon name="openExternal" size={13} color="var(--c-primary)" />
+                Open wiki
               </a>
             ) : null}
           </div>

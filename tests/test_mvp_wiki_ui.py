@@ -58,3 +58,14 @@ def test_wiki_state_resets_when_preview_is_regenerated():
     assert "setWikiPreviewResponse(null)" in save
     assert "setWikiUpdateResponse(null)" in save
     assert "setWikiDialogOpen(false)" in save
+
+
+def test_preview_pane_renders_persistent_wiki_updated_indicator():
+    pane = (WEB_SRC / "components" / "preview" / "PreviewPane.tsx").read_text(encoding="utf-8")
+    workspace = (WEB_SRC / "components" / "WorkspaceV2.tsx").read_text(encoding="utf-8")
+
+    assert "wikiRecord" in pane
+    assert "Wiki updated" in pane
+    assert "wikiRecord.files.length" in pane
+    assert "wikiRecord.backup.path" in pane
+    assert "wikiRecord={sadSave.wikiRecord}" in workspace

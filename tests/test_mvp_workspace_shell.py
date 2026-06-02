@@ -31,3 +31,11 @@ def test_workspace_v2_composes_shell_chat_preview():
     assert "PreviewPane" in shell
     assert "deriveStage" in shell
     assert "data-stage" in app_shell
+
+
+def test_scrollbars_use_light_workspace_tone():
+    globals_css = (WEB_SRC / "app" / "globals.css").read_text(encoding="utf-8")
+
+    assert "scrollbar-color" in globals_css
+    assert "#cbd5e1" in globals_css
+    assert "::-webkit-scrollbar-thumb" in globals_css

@@ -162,6 +162,7 @@ export function WorkspaceV2() {
       <PreviewPane
         preview={sadSave.preview}
         record={sadSave.record}
+        wikiRecord={sadSave.wikiRecord}
         isDraftReady={readinessScore >= 90}
         canUpdateWiki={sadSave.canUpdateWiki}
         isSaving={sadSave.isSaving}

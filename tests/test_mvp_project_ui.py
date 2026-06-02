@@ -80,3 +80,15 @@ def test_save_history_renders_rows_and_refreshes():
     assert "save.save_id" in save_history
     assert "doc_url" in save_history
     assert "historyRefreshKey" in workspace
+
+
+def test_project_list_opens_project_repo_separately_from_save_doc_links():
+    project_list = (WEB_SRC / "components" / "shell" / "ProjectList.tsx").read_text(encoding="utf-8")
+    save_history = (WEB_SRC / "components" / "shell" / "SaveHistory.tsx").read_text(encoding="utf-8")
+
+    assert "projectRepoUrl" in project_list
+    assert "project.drive_folder_id" in project_list
+    assert "Open project repo" in project_list
+    assert "https://drive.google.com/drive/folders/" in project_list
+    assert "save.doc_url" in save_history
+    assert "Open SAD doc" in save_history
