@@ -1,0 +1,65 @@
+# Frontend (sadify-web) image build via Cloud Build.
+#
+# WHY: Next.js NEXT_PUBLIC_* values are BUILD-TIME baked, and
+# `gcloud run deploy --source` cannot pass `--build-arg`. This config bakes them
+# in, then pushes the image. The actual `gcloud run deploy --image` is run
+# SEPARATELY (see below) so the deploy stays an explicit, gated step under your
+# own credentials -- this file only builds + pushes.
+#
+# Run AFTER the backend is deployed (its URL feeds _NEXT_PUBLIC_SADIFY_API_BASE_URL).
+# The _AR_REPO `cloud-run-source-deploy` is auto-created by the backend's first
+# `gcloud run deploy --source .`; if it does not exist yet, create it once:
+#   gcloud artifacts repositories create cloud-run-source-deploy \
+#     --repository-format=docker --location=asia-southeast1
+#
+# Submit (from the worktree root):
+#   gcloud builds submit apps/web --config apps/web/cloudbuild.yaml \
+#     --substitutions \
+#   _NEXT_PUBLIC_SADIFY_API_BASE_URL=<backend Cloud Run URL>,_NEXT_PUBLIC_FIREBASE_API_KEY=<key>,_NEXT_PUBLIC_FIREBASE_APP_ID=<appId>
+#   (project_id / auth_domain / oauth client default below; override if needed.
+#    Firebase web config values are public; supply API_KEY/APP_ID from your
+#    apps/web/.env.local.)
+#
+# Then deploy the pushed image (separate, gated step):
+#   gcloud run deploy sadify-web \
+#     --image asia-southeast1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/sadify-web:latest \
+#     --region asia-southeast1 --allow-unauthenticated --min-instances 0
+
+substitutions:
+  _REGION: asia-southeast1
+  _SERVICE: sadify-web
+  _AR_REPO: cloud-run-source-deploy
+  _TAG: latest
+  _NEXT_PUBLIC_SADIFY_API_BASE_URL: ""
+  _NEXT_PUBLIC_FIREBASE_API_KEY: ""
+  _NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN: "sadify.firebaseapp.com"
+  _NEXT_PUBLIC_FIREBASE_PROJECT_ID: "sadify"
+  _NEXT_PUBLIC_FIREBASE_APP_ID: ""
+  _NEXT_PUBLIC_GOOGLE_OAUTH_CLIENT_ID: "594758969655-0md22e7bs1hvjjg1ihpokvvtpuarq6pp.apps.googleusercontent.com"
+
+steps:
+  - id: build
+    name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - "-t"
+      - "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_AR_REPO}/${_SERVICE}:${_TAG}"
+      - "--build-arg"
+      - "NEXT_PUBLIC_SADIFY_API_BASE_URL=${_NEXT_PUBLIC_SADIFY_API_BASE_URL}"
+      - "--build-arg"
+      - "NEXT_PUBLIC_FIREBASE_API_KEY=${_NEXT_PUBLIC_FIREBASE_API_KEY}"
+      - "--build-arg"
+      - "NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN=${_NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN}"
+      - "--build-arg"
+      - "NEXT_PUBLIC_FIREBASE_PROJECT_ID=${_NEXT_PUBLIC_FIREBASE_PROJECT_ID}"
+      - "--build-arg"
+      - "NEXT_PUBLIC_FIREBASE_APP_ID=${_NEXT_PUBLIC_FIREBASE_APP_ID}"
+      - "--build-arg"
+      - "NEXT_PUBLIC_GOOGLE_OAUTH_CLIENT_ID=${_NEXT_PUBLIC_GOOGLE_OAUTH_CLIENT_ID}"
+      - "."
+
+images:
+  - "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_AR_REPO}/${_SERVICE}:${_TAG}"
+
+options:
+  logging: CLOUD_LOGGING_ONLY

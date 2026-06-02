@@ -82,6 +82,28 @@ def test_frontend_dockerfile_passes_public_build_args():
         assert f"ARG {arg}" in dockerfile
 
 
+def test_frontend_cloudbuild_bakes_public_args_and_pushes_image():
+    # NEXT_PUBLIC_* are build-time, so the frontend image is built via Cloud
+    # Build with --build-arg (gcloud run deploy --source cannot pass them).
+    assert (ROOT / "apps" / "web" / "cloudbuild.yaml").exists()
+    cloudbuild = _read("apps/web/cloudbuild.yaml")
+    for arg in (
+        "NEXT_PUBLIC_SADIFY_API_BASE_URL=",
+        "NEXT_PUBLIC_FIREBASE_API_KEY=",
+        "NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN=",
+        "NEXT_PUBLIC_FIREBASE_PROJECT_ID=",
+        "NEXT_PUBLIC_FIREBASE_APP_ID=",
+        "NEXT_PUBLIC_GOOGLE_OAUTH_CLIENT_ID=",
+    ):
+        assert f"--build-arg" in cloudbuild
+        assert arg in cloudbuild
+    # builds + pushes only; the actual run deploy stays a separate gated step,
+    # so there is no gcloud deploy step (no `entrypoint: gcloud`). "gcloud run
+    # deploy" appears only in the documented separate command in the comments.
+    assert "images:" in cloudbuild
+    assert "entrypoint: gcloud" not in cloudbuild
+
+
 def test_frontend_dockerignore_excludes_build_junk_and_env():
     ignore = _read("apps/web/.dockerignore")
     for pattern in ("node_modules", ".next", ".env"):
