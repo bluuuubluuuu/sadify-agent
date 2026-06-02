@@ -18,7 +18,10 @@ RUN pip install --no-cache-dir \
     "google-auth-oauthlib>=1.2,<2" \
     "google-cloud-firestore>=2.20,<3" \
     "google-cloud-secret-manager>=2.20,<3" \
+    "google-genai>=1.40,<2" \
+    "firebase-admin>=7.0,<8" \
     "uvicorn[standard]>=0.38.0" \
+    "python-multipart>=0.0.20,<1" \
     "pydantic>=2.13.0" \
     "pypdf>=6.10.0" \
     "python-docx>=1.2.0" \

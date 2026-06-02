@@ -44,7 +44,8 @@ def test_backend_dockerfile_installs_extractor_libs_not_streamlit():
     # pandas are not on the API path and must not bloat the image.
     dockerfile = _read("Dockerfile")
     for dep in ('"uvicorn', '"fastapi', '"pypdf', '"python-docx', '"openpyxl',
-                '"google-cloud-firestore', '"google-cloud-secret-manager'):
+                '"google-cloud-firestore', '"google-cloud-secret-manager',
+                '"google-genai', '"firebase-admin', '"python-multipart'):
         assert dep in dockerfile
     # Not pip-installed. The bare words "streamlit"/"google-adk" appear only in
     # an explanatory comment, so assert the absence of their quoted install
