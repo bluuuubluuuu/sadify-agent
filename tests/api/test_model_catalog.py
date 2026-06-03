@@ -1,9 +1,17 @@
 import json
+from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 
 from sadify_api.config import ApiConfig
 from sadify_api.main import create_app
+from sadify_api.services.gemini_structured import (
+    GeminiRequirementAnalysisModel,
+    GeminiSadPreviewModel,
+    _is_model_unavailable_error,
+    parse_requirement_analysis,
+    parse_sad_preview,
+)
 from sadify_api.services.model_catalog import (
     DEFAULT_GEMINI_MODEL,
     GEMINI_MODEL_CATALOG,
@@ -13,6 +21,10 @@ from sadify_api.services.model_catalog import (
 )
 from tests.api.test_gemini_structured import VALID_PAYLOAD
 from tests.api.test_sad_preview import VALID_PREVIEW, _analysis_with_blocking_basics
+
+
+class NotFound(Exception):
+    pass
 
 
 class CapturingRequirementAnalysisModel:
@@ -167,3 +179,62 @@ def test_sad_preview_threads_selected_model_to_preview_model():
 
     assert response.status_code == 200
     assert model.calls[0]["model"] == "gemini-2.5-pro"
+
+
+def test_unavailable_model_detector_accepts_not_found_model_errors():
+    assert _is_model_unavailable_error(NotFound("404 model gemini-2.5-pro not found"))
+    assert _is_model_unavailable_error(Exception("404 model gemini-2.5-pro not found"))
+    assert _is_model_unavailable_error(Exception("Model gemini-2.5-pro was not found"))
+
+
+def test_unavailable_model_detector_rejects_quota_and_runtime_errors():
+    assert not _is_model_unavailable_error(Exception("quota exceeded for model"))
+    assert not _is_model_unavailable_error(RuntimeError("404 upstream unavailable"))
+    assert not _is_model_unavailable_error(NotFound("404 project sadify not found"))
+
+
+class FakeModels:
+    def __init__(self, calls: list[str], response_payload: dict[str, object]) -> None:
+        self._calls = calls
+        self._response_payload = response_payload
+
+    def generate_content(self, *, model: str, **kwargs: object) -> SimpleNamespace:
+        self._calls.append(model)
+        if model == "gemini-2.5-pro":
+            raise NotFound("404 model gemini-2.5-pro not found")
+        return SimpleNamespace(text=json.dumps(json.loads(json.dumps(self._response_payload))))
+
+
+class FakeClient:
+    def __init__(self, calls: list[str], response_payload: dict[str, object]) -> None:
+        self.models = FakeModels(calls, response_payload)
+
+
+def test_analysis_model_falls_back_when_selected_allowlisted_model_is_unavailable():
+    calls: list[str] = []
+    payload = json.loads(json.dumps(VALID_PAYLOAD))
+    payload.setdefault("slot_evidence", [])
+    model = GeminiRequirementAnalysisModel(
+        ApiConfig(environment="test", sadify_model="gemini-2.5-flash"),
+        client_factory=lambda: FakeClient(calls, payload),
+    )
+
+    raw_json = model.analyze_requirement("Need a simple workflow.", model="gemini-2.5-pro")
+
+    parsed = parse_requirement_analysis(raw_json)
+    assert calls == ["gemini-2.5-pro", "gemini-2.5-flash"]
+    assert parsed.understanding_summary
+
+
+def test_sad_preview_model_falls_back_when_selected_allowlisted_model_is_unavailable():
+    calls: list[str] = []
+    model = GeminiSadPreviewModel(
+        ApiConfig(environment="test", sadify_model="gemini-2.5-flash"),
+        client_factory=lambda: FakeClient(calls, json.loads(json.dumps(VALID_PREVIEW))),
+    )
+
+    raw_json = model.generate_preview("Project context", model="gemini-2.5-pro")
+
+    parsed = parse_sad_preview(raw_json)
+    assert calls == ["gemini-2.5-pro", "gemini-2.5-flash"]
+    assert parsed.title

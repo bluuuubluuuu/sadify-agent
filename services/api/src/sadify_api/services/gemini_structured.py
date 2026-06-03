@@ -1,8 +1,9 @@
+from collections.abc import Callable
 from typing import Protocol
 
 from sadify_api.config import ApiConfig
 from sadify_api.schemas import RequirementAnalysisResponse, SadPreviewResponse
-from sadify_api.services.model_catalog import resolve_gemini_model
+from sadify_api.services.model_catalog import backend_default_model, resolve_gemini_model
 from sadify_api.services.questionnaire_plan import canonical_required_slots
 
 
@@ -297,9 +298,65 @@ def sad_preview_schema() -> dict[str, object]:
     }
 
 
+ClientFactory = Callable[[], object]
+
+
+def _create_genai_client(config: ApiConfig) -> object:
+    from google import genai
+    from google.genai.types import HttpOptions
+
+    return genai.Client(
+        vertexai=config.google_genai_use_vertexai,
+        project=config.google_cloud_project,
+        location=config.google_cloud_location,
+        http_options=HttpOptions(api_version="v1"),
+    )
+
+
+def _is_model_unavailable_error(exc: Exception) -> bool:
+    message = str(exc).lower()
+    has_not_found_signal = (
+        exc.__class__.__name__ == "NotFound"
+        or "404" in message
+        or "not found" in message
+    )
+    return has_not_found_signal and "model" in message and "not found" in message
+
+
+def _generate_content_with_model_fallback(
+    *,
+    client: object,
+    requested_model: str | None,
+    config: ApiConfig,
+    contents: str,
+    generation_config: dict[str, object],
+) -> object:
+    selected_model = resolve_gemini_model(requested_model, config)
+    try:
+        return client.models.generate_content(
+            model=selected_model,
+            contents=contents,
+            config=generation_config,
+        )
+    except Exception as exc:
+        default_model = backend_default_model(config)
+        if selected_model == default_model or not _is_model_unavailable_error(exc):
+            raise
+        return client.models.generate_content(
+            model=default_model,
+            contents=contents,
+            config=generation_config,
+        )
+
+
 class GeminiRequirementAnalysisModel:
-    def __init__(self, config: ApiConfig) -> None:
+    def __init__(
+        self,
+        config: ApiConfig,
+        client_factory: ClientFactory | None = None,
+    ) -> None:
         self._config = config
+        self._client_factory = client_factory or (lambda: _create_genai_client(config))
 
     def analyze_requirement(
         self,
@@ -308,20 +365,14 @@ class GeminiRequirementAnalysisModel:
         repair: bool = False,
         model: str | None = None,
     ) -> str:
-        from google import genai
-        from google.genai.types import HttpOptions
-
-        client = genai.Client(
-            vertexai=self._config.google_genai_use_vertexai,
-            project=self._config.google_cloud_project,
-            location=self._config.google_cloud_location,
-            http_options=HttpOptions(api_version="v1"),
-        )
+        client = self._client_factory()
         prompt = _analysis_prompt(requirement_text, repair=repair)
-        response = client.models.generate_content(
-            model=resolve_gemini_model(model, self._config),
+        response = _generate_content_with_model_fallback(
+            client=client,
+            requested_model=model,
+            config=self._config,
             contents=prompt,
-            config={
+            generation_config={
                 "temperature": 0.2,
                 "max_output_tokens": 8000,
                 # gemini-2.5-flash thinking tokens share the output budget and
@@ -385,8 +436,13 @@ def _analysis_prompt(requirement_text: str, *, repair: bool) -> str:
 
 
 class GeminiSadPreviewModel:
-    def __init__(self, config: ApiConfig) -> None:
+    def __init__(
+        self,
+        config: ApiConfig,
+        client_factory: ClientFactory | None = None,
+    ) -> None:
         self._config = config
+        self._client_factory = client_factory or (lambda: _create_genai_client(config))
 
     def generate_preview(
         self,
@@ -395,20 +451,14 @@ class GeminiSadPreviewModel:
         repair: bool = False,
         model: str | None = None,
     ) -> str:
-        from google import genai
-        from google.genai.types import HttpOptions
-
-        client = genai.Client(
-            vertexai=self._config.google_genai_use_vertexai,
-            project=self._config.google_cloud_project,
-            location=self._config.google_cloud_location,
-            http_options=HttpOptions(api_version="v1"),
-        )
+        client = self._client_factory()
         prompt = _sad_preview_prompt(context, repair=repair)
-        response = client.models.generate_content(
-            model=resolve_gemini_model(model, self._config),
+        response = _generate_content_with_model_fallback(
+            client=client,
+            requested_model=model,
+            config=self._config,
             contents=prompt,
-            config={
+            generation_config={
                 "temperature": 0.2,
                 "max_output_tokens": 8000,
                 # See analysis call: 2.5-flash thinking shares the output
