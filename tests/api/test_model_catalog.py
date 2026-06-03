@@ -74,7 +74,6 @@ class CapturingSadPreviewModel:
 def test_gemini_allowlist_contains_supported_model_ids():
     assert tuple(item["id"] for item in GEMINI_MODEL_CATALOG) == (
         "gemini-2.5-flash",
-        "gemini-2.5-pro",
         "gemini-2.5-flash-lite",
     )
     assert all(item["id"].startswith("gemini-") for item in GEMINI_MODEL_CATALOG)
@@ -82,10 +81,10 @@ def test_gemini_allowlist_contains_supported_model_ids():
 
 
 def test_config_default_model_is_used_when_allowlisted():
-    config = ApiConfig(environment="test", sadify_model="gemini-2.5-pro")
+    config = ApiConfig(environment="test", sadify_model="gemini-2.5-flash-lite")
 
-    assert backend_default_model(config) == "gemini-2.5-pro"
-    assert resolve_gemini_model(None, config) == "gemini-2.5-pro"
+    assert backend_default_model(config) == "gemini-2.5-flash-lite"
+    assert resolve_gemini_model(None, config) == "gemini-2.5-flash-lite"
 
 
 def test_invalid_config_default_falls_back_to_backend_default():
@@ -94,46 +93,42 @@ def test_invalid_config_default_falls_back_to_backend_default():
     assert backend_default_model(config) == "gemini-2.5-flash"
     assert resolve_gemini_model(None, config) == "gemini-2.5-flash"
     assert resolve_gemini_model("gemini-not-real", config) == "gemini-2.5-flash"
+    assert resolve_gemini_model("gemini-2.5-pro", config) == "gemini-2.5-flash"
     assert resolve_gemini_model("", config) == "gemini-2.5-flash"
 
 
-def test_list_gemini_models_marks_default_and_includes_pro_hint():
+def test_list_gemini_models_marks_default_and_includes_hints():
     response = list_gemini_models(
-        ApiConfig(environment="test", sadify_model="gemini-2.5-pro")
+        ApiConfig(environment="test", sadify_model="gemini-2.5-flash-lite")
     )
 
-    assert response.default == "gemini-2.5-pro"
+    assert response.default == "gemini-2.5-flash-lite"
     assert [model.id for model in response.models] == [
         "gemini-2.5-flash",
-        "gemini-2.5-pro",
         "gemini-2.5-flash-lite",
     ]
-    pro_model = next(model for model in response.models if model.id == "gemini-2.5-pro")
-    assert pro_model.hint == "slower, higher quality"
+    lite_model = next(
+        model for model in response.models if model.id == "gemini-2.5-flash-lite"
+    )
+    assert lite_model.hint == "fastest"
 
 
 def test_get_models_returns_gemini_catalog():
     client = TestClient(
-        create_app(ApiConfig(environment="test", sadify_model="gemini-2.5-pro"))
+        create_app(ApiConfig(environment="test", sadify_model="gemini-2.5-flash-lite"))
     )
 
     response = client.get("/models")
 
     assert response.status_code == 200
     assert response.json() == {
-        "default": "gemini-2.5-pro",
+        "default": "gemini-2.5-flash-lite",
         "models": [
             {
                 "id": "gemini-2.5-flash",
                 "label": "Gemini 2.5 Flash",
                 "description": "Balanced default for SADify.",
                 "hint": "",
-            },
-            {
-                "id": "gemini-2.5-pro",
-                "label": "Gemini 2.5 Pro",
-                "description": "Higher quality reasoning for complex SAD drafts.",
-                "hint": "slower, higher quality",
             },
             {
                 "id": "gemini-2.5-flash-lite",
@@ -182,9 +177,15 @@ def test_sad_preview_threads_selected_model_to_preview_model():
 
 
 def test_unavailable_model_detector_accepts_not_found_model_errors():
-    assert _is_model_unavailable_error(NotFound("404 model gemini-2.5-pro not found"))
-    assert _is_model_unavailable_error(Exception("404 model gemini-2.5-pro not found"))
-    assert _is_model_unavailable_error(Exception("Model gemini-2.5-pro was not found"))
+    assert _is_model_unavailable_error(
+        NotFound("404 model gemini-2.5-flash-lite not found")
+    )
+    assert _is_model_unavailable_error(
+        Exception("404 model gemini-2.5-flash-lite not found")
+    )
+    assert _is_model_unavailable_error(
+        Exception("Model gemini-2.5-flash-lite was not found")
+    )
 
 
 def test_unavailable_model_detector_rejects_quota_and_runtime_errors():
@@ -200,8 +201,8 @@ class FakeModels:
 
     def generate_content(self, *, model: str, **kwargs: object) -> SimpleNamespace:
         self._calls.append(model)
-        if model == "gemini-2.5-pro":
-            raise NotFound("404 model gemini-2.5-pro not found")
+        if model == "gemini-2.5-flash-lite":
+            raise NotFound("404 model gemini-2.5-flash-lite not found")
         return SimpleNamespace(text=json.dumps(json.loads(json.dumps(self._response_payload))))
 
 
@@ -219,10 +220,12 @@ def test_analysis_model_falls_back_when_selected_allowlisted_model_is_unavailabl
         client_factory=lambda: FakeClient(calls, payload),
     )
 
-    raw_json = model.analyze_requirement("Need a simple workflow.", model="gemini-2.5-pro")
+    raw_json = model.analyze_requirement(
+        "Need a simple workflow.", model="gemini-2.5-flash-lite"
+    )
 
     parsed = parse_requirement_analysis(raw_json)
-    assert calls == ["gemini-2.5-pro", "gemini-2.5-flash"]
+    assert calls == ["gemini-2.5-flash-lite", "gemini-2.5-flash"]
     assert parsed.understanding_summary
 
 
@@ -233,8 +236,8 @@ def test_sad_preview_model_falls_back_when_selected_allowlisted_model_is_unavail
         client_factory=lambda: FakeClient(calls, json.loads(json.dumps(VALID_PREVIEW))),
     )
 
-    raw_json = model.generate_preview("Project context", model="gemini-2.5-pro")
+    raw_json = model.generate_preview("Project context", model="gemini-2.5-flash-lite")
 
     parsed = parse_sad_preview(raw_json)
-    assert calls == ["gemini-2.5-pro", "gemini-2.5-flash"]
+    assert calls == ["gemini-2.5-flash-lite", "gemini-2.5-flash"]
     assert parsed.title

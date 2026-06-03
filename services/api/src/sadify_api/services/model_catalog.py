@@ -12,12 +12,6 @@ GEMINI_MODEL_CATALOG: tuple[dict[str, str], ...] = (
         "hint": "",
     },
     {
-        "id": "gemini-2.5-pro",
-        "label": "Gemini 2.5 Pro",
-        "description": "Higher quality reasoning for complex SAD drafts.",
-        "hint": "slower, higher quality",
-    },
-    {
         "id": "gemini-2.5-flash-lite",
         "label": "Gemini 2.5 Flash-Lite",
         "description": "Fastest Gemini option for low-latency drafts.",
