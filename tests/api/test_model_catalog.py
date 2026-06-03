@@ -1,3 +1,5 @@
+import json
+
 from fastapi.testclient import TestClient
 
 from sadify_api.config import ApiConfig
@@ -9,6 +11,52 @@ from sadify_api.services.model_catalog import (
     list_gemini_models,
     resolve_gemini_model,
 )
+from tests.api.test_gemini_structured import VALID_PAYLOAD
+from tests.api.test_sad_preview import VALID_PREVIEW, _analysis_with_blocking_basics
+
+
+class CapturingRequirementAnalysisModel:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+
+    def analyze_requirement(
+        self,
+        requirement_text: str,
+        *,
+        repair: bool = False,
+        model: str | None = None,
+    ) -> str:
+        self.calls.append(
+            {
+                "requirement_text": requirement_text,
+                "repair": repair,
+                "model": model,
+            }
+        )
+        payload = json.loads(json.dumps(VALID_PAYLOAD))
+        payload.setdefault("slot_evidence", [])
+        return json.dumps(payload)
+
+
+class CapturingSadPreviewModel:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+
+    def generate_preview(
+        self,
+        context: str,
+        *,
+        repair: bool = False,
+        model: str | None = None,
+    ) -> str:
+        self.calls.append(
+            {
+                "context": context,
+                "repair": repair,
+                "model": model,
+            }
+        )
+        return json.dumps(json.loads(json.dumps(VALID_PREVIEW)))
 
 
 def test_gemini_allowlist_contains_supported_model_ids():
@@ -83,3 +131,39 @@ def test_get_models_returns_gemini_catalog():
             },
         ],
     }
+
+
+def test_analysis_requirement_threads_selected_model_to_analysis_model():
+    model = CapturingRequirementAnalysisModel()
+    client = TestClient(create_app(analysis_model=model))
+
+    response = client.post(
+        "/analysis/requirement",
+        json={
+            "requirement_text": "Need a simple way to validate operational ideas.",
+            "model": "gemini-2.5-pro",
+        },
+    )
+
+    assert response.status_code == 200
+    assert model.calls[0]["model"] == "gemini-2.5-pro"
+
+
+def test_sad_preview_threads_selected_model_to_preview_model():
+    model = CapturingSadPreviewModel()
+    client = TestClient(create_app(sad_preview_model=model))
+
+    response = client.post(
+        "/sad/preview",
+        json={
+            "requirement_text": "Need to validate an operational workflow.",
+            "analysis_id": "AN-000001",
+            "analysis": json.loads(json.dumps(_analysis_with_blocking_basics())),
+            "model": "gemini-2.5-pro",
+            "source_context": "[SRC-000001] workflow.md\nThe workflow needs approval.",
+            "source_references": ["SRC-000001"],
+        },
+    )
+
+    assert response.status_code == 200
+    assert model.calls[0]["model"] == "gemini-2.5-pro"

@@ -2,16 +2,29 @@ from typing import Protocol
 
 from sadify_api.config import ApiConfig
 from sadify_api.schemas import RequirementAnalysisResponse, SadPreviewResponse
+from sadify_api.services.model_catalog import resolve_gemini_model
 from sadify_api.services.questionnaire_plan import canonical_required_slots
 
 
 class RequirementAnalysisModel(Protocol):
-    def analyze_requirement(self, requirement_text: str, *, repair: bool = False) -> str:
+    def analyze_requirement(
+        self,
+        requirement_text: str,
+        *,
+        repair: bool = False,
+        model: str | None = None,
+    ) -> str:
         """Return model output as raw JSON text."""
 
 
 class SadPreviewModel(Protocol):
-    def generate_preview(self, context: str, *, repair: bool = False) -> str:
+    def generate_preview(
+        self,
+        context: str,
+        *,
+        repair: bool = False,
+        model: str | None = None,
+    ) -> str:
         """Return model output as raw JSON text."""
 
 
@@ -288,7 +301,13 @@ class GeminiRequirementAnalysisModel:
     def __init__(self, config: ApiConfig) -> None:
         self._config = config
 
-    def analyze_requirement(self, requirement_text: str, *, repair: bool = False) -> str:
+    def analyze_requirement(
+        self,
+        requirement_text: str,
+        *,
+        repair: bool = False,
+        model: str | None = None,
+    ) -> str:
         from google import genai
         from google.genai.types import HttpOptions
 
@@ -300,7 +319,7 @@ class GeminiRequirementAnalysisModel:
         )
         prompt = _analysis_prompt(requirement_text, repair=repair)
         response = client.models.generate_content(
-            model=self._config.sadify_model,
+            model=resolve_gemini_model(model, self._config),
             contents=prompt,
             config={
                 "temperature": 0.2,
@@ -369,7 +388,13 @@ class GeminiSadPreviewModel:
     def __init__(self, config: ApiConfig) -> None:
         self._config = config
 
-    def generate_preview(self, context: str, *, repair: bool = False) -> str:
+    def generate_preview(
+        self,
+        context: str,
+        *,
+        repair: bool = False,
+        model: str | None = None,
+    ) -> str:
         from google import genai
         from google.genai.types import HttpOptions
 
@@ -381,7 +406,7 @@ class GeminiSadPreviewModel:
         )
         prompt = _sad_preview_prompt(context, repair=repair)
         response = client.models.generate_content(
-            model=self._config.sadify_model,
+            model=resolve_gemini_model(model, self._config),
             contents=prompt,
             config={
                 "temperature": 0.2,

@@ -65,6 +65,23 @@ class QuestionnaireDriftError(Exception):
     """Raised when Gemini returns structurally valid but workflow-invalid output."""
 
 
+def _call_analysis_model(
+    model: RequirementAnalysisModel,
+    requirement_text: str,
+    *,
+    repair: bool,
+    selected_model: str | None,
+) -> str:
+    if selected_model:
+        return model.analyze_requirement(
+            requirement_text,
+            repair=repair,
+            model=selected_model,
+        )
+
+    return model.analyze_requirement(requirement_text, repair=repair)
+
+
 def create_analysis_router(
     model: RequirementAnalysisModel,
     repository: RequirementAnalysisRepository,
@@ -89,9 +106,11 @@ def create_analysis_router(
                     request,
                     locked_target=locked_target,
                 )
-                raw_json = model.analyze_requirement(
+                raw_json = _call_analysis_model(
+                    model,
                     model_requirement_text,
                     repair=repair,
+                    selected_model=request.model,
                 )
                 analysis = _with_requested_source_references(
                     parse_requirement_analysis(raw_json),

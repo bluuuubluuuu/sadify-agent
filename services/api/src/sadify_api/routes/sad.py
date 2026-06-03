@@ -69,6 +69,23 @@ WIKI_FOLDER_NAME = "Wiki"
 WIKI_MIME_TYPE = "text/markdown"
 
 
+def _call_sad_preview_model(
+    model: SadPreviewModel,
+    context: str,
+    *,
+    repair: bool,
+    selected_model: str | None,
+) -> str:
+    if selected_model:
+        return model.generate_preview(
+            context,
+            repair=repair,
+            model=selected_model,
+        )
+
+    return model.generate_preview(context, repair=repair)
+
+
 def create_sad_router(
     model: SadPreviewModel,
     repository: SadPreviewRepository,
@@ -112,7 +129,12 @@ def create_sad_router(
         for repair in (False, True):
             raw_json = ""
             try:
-                raw_json = model.generate_preview(context, repair=repair)
+                raw_json = _call_sad_preview_model(
+                    model,
+                    context,
+                    repair=repair,
+                    selected_model=request.model,
+                )
                 preview = with_requested_source_references(
                     parse_sad_preview(raw_json),
                     request.source_references,
