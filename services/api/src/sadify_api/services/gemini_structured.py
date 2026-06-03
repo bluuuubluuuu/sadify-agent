@@ -323,20 +323,51 @@ def _is_model_unavailable_error(exc: Exception) -> bool:
     return has_not_found_signal and "model" in message and "not found" in message
 
 
+def _build_generation_config(
+    model: str,
+    response_schema: dict[str, object],
+) -> dict[str, object]:
+    """Model-aware generation config.
+
+    Built per the model actually being called, because Pro and Flash have
+    incompatible thinking settings — see the branch comments. Always recompute
+    this from the resolved model (including on the fallback retry) so that a
+    Pro -> Flash fallback uses Flash's config, not Pro's.
+    """
+    config: dict[str, object] = {
+        "temperature": 0.2,
+        "response_mime_type": "application/json",
+        "response_schema": response_schema,
+    }
+    if model == "gemini-2.5-pro":
+        # Gemini 2.5 Pro is a thinking model and rejects thinking_budget=0.
+        # Leave thinking enabled and raise the output ceiling so reasoning
+        # tokens do not starve the structured JSON response.
+        config["max_output_tokens"] = 24000
+    else:
+        # Flash / Flash-Lite: thinking tokens share the output budget and were
+        # silently consuming most of it, leaving JSON truncated mid-property.
+        # Structured output does not benefit from thinking, so disable it and
+        # keep the original 8000-token ceiling. Preserves prior behavior.
+        config["max_output_tokens"] = 8000
+        config["thinking_config"] = {"thinking_budget": 0}
+    return config
+
+
 def _generate_content_with_model_fallback(
     *,
     client: object,
     requested_model: str | None,
     config: ApiConfig,
     contents: str,
-    generation_config: dict[str, object],
+    response_schema: dict[str, object],
 ) -> object:
     selected_model = resolve_gemini_model(requested_model, config)
     try:
         return client.models.generate_content(
             model=selected_model,
             contents=contents,
-            config=generation_config,
+            config=_build_generation_config(selected_model, response_schema),
         )
     except Exception as exc:
         default_model = backend_default_model(config)
@@ -345,7 +376,7 @@ def _generate_content_with_model_fallback(
         return client.models.generate_content(
             model=default_model,
             contents=contents,
-            config=generation_config,
+            config=_build_generation_config(default_model, response_schema),
         )
 
 
@@ -372,17 +403,7 @@ class GeminiRequirementAnalysisModel:
             requested_model=model,
             config=self._config,
             contents=prompt,
-            generation_config={
-                "temperature": 0.2,
-                "max_output_tokens": 8000,
-                # gemini-2.5-flash thinking tokens share the output budget and
-                # were silently consuming most of it, leaving JSON truncated
-                # mid-property. Structured output does not benefit from
-                # thinking, so disable it.
-                "thinking_config": {"thinking_budget": 0},
-                "response_mime_type": "application/json",
-                "response_schema": requirement_analysis_schema(),
-            },
+            response_schema=requirement_analysis_schema(),
         )
         return response.text or ""
 
@@ -458,15 +479,7 @@ class GeminiSadPreviewModel:
             requested_model=model,
             config=self._config,
             contents=prompt,
-            generation_config={
-                "temperature": 0.2,
-                "max_output_tokens": 8000,
-                # See analysis call: 2.5-flash thinking shares the output
-                # budget and starves the JSON response.
-                "thinking_config": {"thinking_budget": 0},
-                "response_mime_type": "application/json",
-                "response_schema": sad_preview_schema(),
-            },
+            response_schema=sad_preview_schema(),
         )
         return response.text or ""
 
