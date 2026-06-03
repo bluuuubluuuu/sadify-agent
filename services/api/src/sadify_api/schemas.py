@@ -19,6 +19,18 @@ class ConfigDiagnosticsResponse(HealthResponse):
     secrets: str
 
 
+class ModelCatalogItem(ApiModel):
+    id: str = Field(min_length=1)
+    label: str = Field(min_length=1)
+    description: str = ""
+    hint: str = ""
+
+
+class ModelCatalogResponse(ApiModel):
+    default: str = Field(min_length=1)
+    models: list[ModelCatalogItem] = Field(default_factory=list)
+
+
 class AuthenticatedUser(ApiModel):
     uid: str
     email: str | None = None

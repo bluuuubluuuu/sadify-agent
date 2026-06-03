@@ -8,6 +8,7 @@ from sadify_api.routes.diagnostics import create_diagnostics_router
 from sadify_api.routes.drive import create_drive_router
 from sadify_api.routes.drafts import create_drafts_router
 from sadify_api.routes.health import create_health_router
+from sadify_api.routes.models import create_models_router
 from sadify_api.routes.projects import create_projects_router
 from sadify_api.routes.sad import create_sad_router
 from sadify_api.routes.sources import create_sources_router
@@ -94,6 +95,7 @@ def create_app(
         allow_headers=["authorization", "content-type"],
     )
     app.include_router(create_health_router(config))
+    app.include_router(create_models_router(config))
     app.include_router(create_auth_router(token_verifier))
     app.include_router(create_drafts_router(draft_repository, token_verifier))
     app.include_router(create_analysis_router(analysis_model, analysis_repository))
