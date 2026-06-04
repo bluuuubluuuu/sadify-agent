@@ -39,19 +39,18 @@ def test_backend_dockerfile_starts_uvicorn_factory():
     assert "${PORT:-8080}" in dockerfile
 
 
-def test_backend_dockerfile_installs_extractor_libs_not_streamlit():
-    # The API only needs the lazy-imported extractor libs; streamlit / adk /
-    # pandas are not on the API path and must not bloat the image.
+def test_backend_dockerfile_installs_api_runtime_libs_not_streamlit():
+    # The API needs the lazy-imported extractor libs plus google-adk for the
+    # TC-034 agent path. Streamlit / pandas are not on the API path and must
+    # not bloat the image.
     dockerfile = _read("Dockerfile")
     for dep in ('"uvicorn', '"fastapi', '"pypdf', '"python-docx', '"openpyxl',
                 '"google-cloud-firestore', '"google-cloud-secret-manager',
-                '"google-genai', '"firebase-admin', '"python-multipart'):
+                '"google-adk', '"google-genai', '"firebase-admin',
+                '"python-multipart'):
         assert dep in dockerfile
-    # Not pip-installed. The bare words "streamlit"/"google-adk" appear only in
-    # an explanatory comment, so assert the absence of their quoted install
-    # spec ('"name') rather than the bare word.
     assert '"streamlit' not in dockerfile
-    assert '"google-adk' not in dockerfile
+    assert '"pandas' not in dockerfile
 
 
 def test_backend_dockerfile_uses_explicit_copy_not_whole_context():

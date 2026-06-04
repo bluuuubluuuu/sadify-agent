@@ -10,7 +10,8 @@ WORKDIR /app
 
 # Dependencies mirror services/api/pyproject.toml plus the three lazy-imported
 # extractor libs used by sadify.extractors.business_files (pypdf / python-docx /
-# openpyxl). streamlit / google-adk / pandas are NOT needed on the API path.
+# openpyxl). google-adk is included for the TC-034 API-hosted agent path.
+# streamlit / pandas are NOT needed on the API path.
 RUN pip install --no-cache-dir \
     "fastapi>=0.124.0" \
     "google-api-python-client>=2.130,<3" \
@@ -18,6 +19,7 @@ RUN pip install --no-cache-dir \
     "google-auth-oauthlib>=1.2,<2" \
     "google-cloud-firestore>=2.20,<3" \
     "google-cloud-secret-manager>=2.20,<3" \
+    "google-adk>=1.32.0,<2" \
     "google-genai>=1.40,<2" \
     "firebase-admin>=7.0,<8" \
     "uvicorn[standard]>=0.38.0" \
