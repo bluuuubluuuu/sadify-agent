@@ -1,7 +1,6 @@
 import logging
 
 from fastapi import APIRouter, HTTPException
-from pydantic import ValidationError
 
 from sadify_api.schemas import (
     QuestionnairePlanSlotPointer,
@@ -11,9 +10,9 @@ from sadify_api.schemas import (
     SlotEvidence,
 )
 from sadify_api.services.analysis_state import RequirementAnalysisRepository
+from sadify_api.services.analysis_flow import AnalysisModelError, run_analysis_turn
 from sadify_api.services.gemini_structured import (
     RequirementAnalysisModel,
-    parse_requirement_analysis,
 )
 from sadify_api.services.questionnaire_plan import (
     CANONICAL_CATEGORY_IDS,
@@ -92,93 +91,15 @@ def create_analysis_router(
     def analyze_requirement(
         request: RequirementAnalysisRequest,
     ) -> RequirementAnalysisApiResponse:
-        prior_record = repository.latest_for_request(request)
-        prior_analysis = prior_record.analysis if prior_record is not None else None
-        locked_target = _locked_target_for_request(
-            request, prior_analysis=prior_analysis
-        )
-        locked_categories = _prior_locked_categories(prior_analysis)
-        validation_errors: list[str] = []
-        for repair in (False, True):
-            raw_json = ""
-            try:
-                model_requirement_text = _build_model_requirement_text(
-                    request,
-                    locked_target=locked_target,
-                )
-                raw_json = _call_analysis_model(
-                    model,
-                    model_requirement_text,
-                    repair=repair,
-                    selected_model=request.model,
-                )
-                analysis = _with_requested_source_references(
-                    parse_requirement_analysis(raw_json),
-                    request.source_references,
-                )
-                _validate_model_analysis(
-                    analysis,
-                    locked_target=locked_target,
-                )
-                analysis = _with_questionnaire_state(
-                    analysis,
-                    request,
-                    fallback_used=False,
-                    prior_analysis=prior_analysis,
-                )
-            except (ValidationError, QuestionnaireDriftError) as exc:
-                validation_errors.append(
-                    f"repair={repair}:{type(exc).__name__}:{_safe_exception_message(exc)[:120]}"
-                )
-                continue
-            except Exception as exc:
-                logger.exception(
-                    "sadify_turn analysis_call_failed repair=%s raw_len=%d",
-                    repair,
-                    len(raw_json),
-                )
-                raise HTTPException(
-                    status_code=502,
-                    detail=f"Gemini analysis failed: {_safe_exception_message(exc)}",
-                ) from exc
-
-            record = repository.save_analysis(
-                requirement_text=request.requirement_text,
-                guest_draft_id=request.guest_draft_id,
-                analysis_session_id=request.analysis_session_id,
-                analysis=analysis,
+        try:
+            record = run_analysis_turn(
+                request=request,
+                model=model,
+                repository=repository,
+                log_turn=_log_turn,
             )
-            _log_turn(
-                record=record,
-                source="gemini",
-                prior=prior_record,
-                locked_categories=locked_categories,
-                validation_errors=validation_errors,
-            )
-            return RequirementAnalysisApiResponse(
-                analysis_id=record.analysis_id,
-                saved=True,
-                analysis=record.analysis,
-            )
-
-        fallback_analysis = _fallback_requirement_analysis(
-            request,
-            locked_target=locked_target,
-            prior_analysis=prior_analysis,
-        )
-        record = repository.save_analysis(
-            requirement_text=request.requirement_text,
-            guest_draft_id=request.guest_draft_id,
-            analysis_session_id=request.analysis_session_id,
-            analysis=fallback_analysis,
-        )
-        _log_turn(
-            record=record,
-            source="fallback",
-            prior=prior_record,
-            locked_categories=locked_categories,
-            validation_errors=validation_errors,
-        )
+        except AnalysisModelError as exc:
+            raise HTTPException(status_code=502, detail=exc.detail) from exc
         return RequirementAnalysisApiResponse(
             analysis_id=record.analysis_id,
             saved=True,
