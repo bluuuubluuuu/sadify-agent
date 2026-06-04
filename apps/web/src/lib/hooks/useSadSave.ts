@@ -40,6 +40,7 @@ export function useSadSave({
   analysisResponse,
   sourceContext = "",
   sourceReferences = [],
+  selectedModel,
   onProjectCreated,
   onHistoryRefresh,
 }: {
@@ -47,6 +48,7 @@ export function useSadSave({
   analysisResponse: RequirementAnalysisApiResponse | null;
   sourceContext?: string;
   sourceReferences?: string[];
+  selectedModel?: string;
   onProjectCreated?: (response: CreateProjectResponse) => void;
   onHistoryRefresh?: () => void;
 }) {
@@ -104,6 +106,7 @@ export function useSadSave({
         analysis: analysisResponse.analysis,
         sourceContext: sourceContext || undefined,
         sourceReferences,
+        model: selectedModel || undefined,
       });
       setPreviewResponse(response);
       setSaveResponse(null);

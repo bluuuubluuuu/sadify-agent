@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import type { SourceRecord } from "../../lib/api";
+import type { ModelCatalogResponse, SourceRecord } from "../../lib/api";
 import type { useQnA } from "../../lib/hooks/useQnA";
 import { Button } from "../ui/Button";
 import { Icon } from "../ui/Icon";
@@ -10,6 +10,7 @@ import { ChatThread, type ChatMessage } from "./ChatThread";
 import { AnswerChips } from "./AnswerChips";
 import { AttachChips } from "./AttachChips";
 import { Composer } from "./Composer";
+import { ModelPicker } from "./ModelPicker";
 import styles from "./chat.module.css";
 
 type QnA = ReturnType<typeof useQnA>;
@@ -22,6 +23,9 @@ export function ChatPanel({
   attaching,
   onAttachAdd,
   onAttachRemove,
+  modelCatalog,
+  selectedModel,
+  onModelChange,
   generating,
   onGenerate,
   banner,
@@ -31,6 +35,9 @@ export function ChatPanel({
   attaching?: boolean;
   onAttachAdd: (files: File[]) => void;
   onAttachRemove: (fileName: string) => void;
+  modelCatalog: ModelCatalogResponse;
+  selectedModel: string;
+  onModelChange: (modelId: string) => void;
   generating?: boolean;
   onGenerate: () => void;
   banner?: ReactNode;
@@ -145,6 +152,13 @@ export function ChatPanel({
           event.target.value = "";
         }}
       />
+      <div className={styles.modelBar}>
+        <ModelPicker
+          catalog={modelCatalog}
+          selectedModel={selectedModel}
+          onChange={onModelChange}
+        />
+      </div>
       <ChatThread
         messages={messages}
         thinking={qna.isBusy && !qna.isQuestionnaireReady}

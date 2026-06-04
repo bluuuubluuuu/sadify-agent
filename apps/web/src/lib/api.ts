@@ -10,6 +10,18 @@ export type AuthSessionResponse = {
   user: AuthenticatedUser;
 };
 
+export type ModelCatalogItem = {
+  id: string;
+  label: string;
+  description: string;
+  hint: string;
+};
+
+export type ModelCatalogResponse = {
+  default: string;
+  models: ModelCatalogItem[];
+};
+
 export type GuestDraftRecord = {
   guest_draft_id: string;
   owner_kind: "guest";
@@ -441,6 +453,16 @@ export async function verifyAuthSession(idToken: string): Promise<AuthSessionRes
   return response.json();
 }
 
+export async function listModels(): Promise<ModelCatalogResponse> {
+  const response = await fetch(`${baseUrl}/models`);
+
+  if (!response.ok) {
+    throw new Error("Could not load the available AI models.");
+  }
+
+  return response.json();
+}
+
 export async function createGuestDraft(input: {
   guestSessionId: string;
   requirementText?: string;
@@ -487,6 +509,7 @@ export async function analyzeRequirement(input: {
   analysisSessionId?: string;
   sourceContext?: string;
   sourceReferences?: string[];
+  model?: string;
 }): Promise<RequirementAnalysisApiResponse> {
   const response = await fetch(`${baseUrl}/analysis/requirement`, {
     method: "POST",
@@ -499,6 +522,7 @@ export async function analyzeRequirement(input: {
       analysis_session_id: input.analysisSessionId ?? null,
       source_context: input.sourceContext ?? null,
       source_references: input.sourceReferences ?? [],
+      model: input.model ?? null,
     }),
   });
 
@@ -520,6 +544,7 @@ export async function generateSadPreview(input: {
   analysis: RequirementAnalysis;
   sourceContext?: string;
   sourceReferences?: string[];
+  model?: string;
 }): Promise<SadPreviewApiResponse> {
   const response = await fetch(`${baseUrl}/sad/preview`, {
     method: "POST",
@@ -532,6 +557,7 @@ export async function generateSadPreview(input: {
       analysis: input.analysis,
       source_context: input.sourceContext ?? null,
       source_references: input.sourceReferences ?? [],
+      model: input.model ?? null,
     }),
   });
 

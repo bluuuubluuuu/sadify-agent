@@ -6,6 +6,7 @@ import {
   getDriveRepoStatus,
   type CreateProjectResponse,
   type DriveRepoRecord,
+  type ModelCatalogResponse,
   type SourceRecord,
 } from "../lib/api";
 import { getFirebaseAuth } from "../lib/firebaseClient";
@@ -16,11 +17,13 @@ import { useDriveRepo } from "../lib/hooks/useDriveRepo";
 import { useSources } from "../lib/hooks/useSources";
 import { useQnA } from "../lib/hooks/useQnA";
 import { useSadSave } from "../lib/hooks/useSadSave";
+import { useModelCatalog } from "../lib/hooks/useModelCatalog";
 import { AppShell } from "./shell/AppShell";
 import { Sidebar } from "./shell/Sidebar";
 import { ConnectDriveBanner } from "./shell/ConnectDriveBanner";
 import { CreateProjectDialog } from "./shell/CreateProjectDialog";
 import { ChatPanel } from "./chat/ChatPanel";
+import { ModelPicker } from "./chat/ModelPicker";
 import { ReadinessPane, PreviewPlaceholder } from "./chat/ReadinessPane";
 import { PreviewPane } from "./preview/PreviewPane";
 import { WikiDialog } from "./preview/WikiDialog";
@@ -42,12 +45,14 @@ export function WorkspaceV2() {
   const [analysisSessionId, setAnalysisSessionId] = useState(() => crypto.randomUUID());
   const [startText, setStartText] = useState("");
 
+  const models = useModelCatalog();
   const sources = useSources();
   const driveActions = useDriveRepo(setDriveRepo);
   const qna = useQnA({
     sourceContext: sources.analysisContext,
     sourceReferences: sources.sourceReferences,
     analysisSessionId,
+    selectedModel: models.isLoaded ? models.selectedModel : undefined,
     onAnalysisSaved: () => {},
   });
 
@@ -73,6 +78,7 @@ export function WorkspaceV2() {
     analysisResponse: qna.analysisResponse,
     sourceContext: sources.analysisContext,
     sourceReferences: sources.sourceReferences,
+    selectedModel: models.isLoaded ? models.selectedModel : undefined,
     onProjectCreated: handleProjectCreated,
     onHistoryRefresh: () => setHistoryRefreshKey((key) => key + 1),
   });
@@ -134,6 +140,9 @@ export function WorkspaceV2() {
       attaching={sources.isBusy}
       onAttachAdd={(files) => sources.add(files)}
       onAttachRemove={(name) => sources.remove(name)}
+      modelCatalog={models.catalog}
+      selectedModel={models.selectedModel}
+      onModelChange={models.setSelectedModel}
       generating={sadSave.generating}
       onGenerate={() => sadSave.generate()}
       banner={
@@ -151,6 +160,9 @@ export function WorkspaceV2() {
       onAttachRemove={(name) => sources.remove(name)}
       onChange={setStartText}
       onStart={() => qna.startAnalysis(startText)}
+      modelCatalog={models.catalog}
+      selectedModel={models.selectedModel}
+      onModelChange={models.setSelectedModel}
       onSignIn={() => {
         void auth.signIn().catch(() => undefined);
       }}
@@ -227,6 +239,9 @@ function StartBox({
   onAttachRemove,
   onChange,
   onStart,
+  modelCatalog,
+  selectedModel,
+  onModelChange,
   onSignIn,
 }: {
   value: string;
@@ -238,6 +253,9 @@ function StartBox({
   onAttachRemove: (fileName: string) => void;
   onChange: (value: string) => void;
   onStart: () => void;
+  modelCatalog: ModelCatalogResponse;
+  selectedModel: string;
+  onModelChange: (modelId: string) => void;
   onSignIn: () => void;
 }) {
   const fileRef = useRef<HTMLInputElement>(null);
@@ -263,6 +281,13 @@ function StartBox({
           gap: 14,
         }}
       >
+        <div style={{ display: "flex", justifyContent: "center" }}>
+          <ModelPicker
+            catalog={modelCatalog}
+            selectedModel={selectedModel}
+            onChange={onModelChange}
+          />
+        </div>
         <div
           style={{
             width: 46,

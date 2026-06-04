@@ -14,6 +14,7 @@ export function useQnA({
   sourceContext = "",
   sourceReferences = [],
   analysisSessionId,
+  selectedModel,
   onAnalysisSaved,
   onAnswerSubmitted,
   onAnswerKeptForPreview,
@@ -21,6 +22,7 @@ export function useQnA({
   sourceContext?: string;
   sourceReferences?: string[];
   analysisSessionId: string;
+  selectedModel?: string;
   onAnalysisSaved: (response: RequirementAnalysisApiResponse, requirementText: string) => void;
   onAnswerSubmitted?: (response: RequirementAnalysisApiResponse, answerText: string) => void;
   onAnswerKeptForPreview?: (
@@ -49,6 +51,7 @@ export function useQnA({
         analysisSessionId,
         sourceContext: sourceContext || undefined,
         sourceReferences,
+        model: selectedModel || undefined,
       });
       setRequirementText(cleanText);
       setCleanRequirementText(cleanText);
@@ -115,6 +118,7 @@ export function useQnA({
         analysisSessionId,
         sourceContext: sourceContext || undefined,
         sourceReferences,
+        model: selectedModel || undefined,
       });
       setAnalysisResponse(response);
       setAnswerHistory((current) => [

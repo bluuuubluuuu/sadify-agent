@@ -48,6 +48,42 @@
   gap: 12px;
   padding: 0 20px 18px;
 }
+.modelBar {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 20px;
+  border-bottom: 1px solid var(--c-border);
+  background: var(--c-surface);
+  flex: none;
+}
+.modelPicker {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.modelLabel {
+  font-size: 12px;
+  font-weight: var(--fw-bold);
+  color: var(--c-subtle);
+}
+.modelSelect {
+  max-width: 230px;
+  border: 1px solid var(--c-border);
+  border-radius: 8px;
+  background: var(--c-bg);
+  color: var(--c-fg);
+  font: inherit;
+  font-size: 12px;
+  padding: 6px 9px;
+}
+.modelHint {
+  font-size: 11px;
+  color: var(--c-subtle);
+  white-space: nowrap;
+}
 /* answer choices — aligned grid, not scattered pills */
 .chips {
   display: grid;
@@ -273,4 +309,19 @@
 .errorMsg {
   font-size: 12px;
   color: var(--c-danger);
+}
+@media (max-width: 767px) {
+  .modelBar {
+    padding: 10px 14px;
+  }
+  .modelPicker {
+    flex: 1;
+    justify-content: flex-end;
+  }
+  .modelSelect {
+    max-width: min(210px, 58vw);
+  }
+  .modelHint {
+    display: none;
+  }
 }
