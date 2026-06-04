@@ -40,15 +40,12 @@ from sadify_api.services.gemini_structured import SadPreviewModel
 from sadify_api.services.sad_flow import (
     SadPreviewBlockedError,
     SadPreviewModelError,
+    SadSaveFlowError,
     run_sad_preview,
+    run_sad_save,
 )
 from sadify_api.services.sad_preview import SadPreviewRepository
-from sadify_api.services.sad_save import (
-    SadSaveDriveUploadError,
-    SadSaveRepository,
-    SadSaveTokenInvalidError,
-    SadSaveTokenMissingError,
-)
+from sadify_api.services.sad_save import SadSaveRepository
 from sadify_api.services.projects import ProjectRepository
 from sadify_api.services.wiki_backup import (
     WikiBackupError,
@@ -122,149 +119,24 @@ def create_sad_router(
                 ) from exc
             raise
 
-        preview_id = (request.preview_id or "").strip()
-        if not preview_id:
-            raise _sad_save_error(
-                400,
-                "SAD_SAVE_PREVIEW_REQUIRED",
-                "Generate a SAD preview before saving.",
-            )
-
-        repo = drive_repo_repository.get_active_repo(user.uid)
-        if repo is None:
-            latest_repo = drive_repo_repository.get_latest_repo(user.uid)
-            if latest_repo and (
-                latest_repo.status == "disconnected" or latest_repo.saves_blocked
-            ):
-                raise _sad_save_error(
-                    409,
-                    "SAD_SAVE_REPO_DISCONNECTED",
-                    "Reconnect Google Drive before saving.",
-                )
-            raise _sad_save_error(
-                409,
-                "SAD_SAVE_REPO_REQUIRED",
-                "Connect a Google Drive project repo before saving.",
-            )
-        if repo.status == "disconnected" or repo.saves_blocked:
-            raise _sad_save_error(
-                409,
-                "SAD_SAVE_REPO_DISCONNECTED",
-                "Reconnect Google Drive before saving.",
-            )
-        if not repo.active_project_id:
-            raise _sad_save_error(
-                409,
-                "PROJECT_REQUIRED",
-                "Create or select a project before saving.",
-            )
-        project = None
-        if project_repository is not None:
-            project = project_repository.get_project(
-                repo.grant_id,
-                repo.active_project_id,
-            )
-            if project is None:
-                raise _sad_save_error(
-                    409,
-                    "PROJECT_REQUIRED",
-                    "Create or select a project before saving.",
-                )
-        if project is None:
-            project = next(
-                (
-                    candidate
-                    for candidate in repo.available_projects
-                    if candidate.project_id == repo.active_project_id
-                ),
-                None,
-            )
-        if project is None:
-            raise _sad_save_error(
-                409,
-                "PROJECT_REQUIRED",
-                "Create or select a project before saving.",
-            )
-
-        preview_record = repository.get_preview(preview_id)
-        if preview_record is None:
-            raise _sad_save_error(
-                404,
-                "SAD_SAVE_PREVIEW_NOT_FOUND",
-                "This SAD preview is no longer available. Generate it again before saving.",
-            )
-
-        sources = []
-        seen_source_ids = set()
-        for source_reference in preview_record.preview.source_references:
-            source_id = source_reference.strip()
-            if not source_id.startswith("SRC-") or source_id in seen_source_ids:
-                continue
-            source = source_repository.get_source(source_id)
-            if source is None:
-                continue
-            sources.append(source)
-            seen_source_ids.add(source_id)
-
         try:
-            live_drive_client = drive_client
-            live_secret_store = secret_store
-            target_folder_id = None
-            if config.drive_mode == "live":
-                live_drive_client, live_secret_store = _resolve_live_services(
-                    config=config,
-                    drive_client=drive_client,
-                    secret_store=secret_store,
-                )
-                refresh_token = live_secret_store.get_user_refresh_token(user.uid)
-                if not refresh_token:
-                    raise SadSaveTokenMissingError("Drive refresh token is missing.")
-                try:
-                    access_token = live_drive_client.refresh_access_token(refresh_token)
-                except DriveTokenInvalidError as exc:
-                    raise SadSaveTokenInvalidError(
-                        "Drive refresh token is invalid or expired."
-                    ) from exc
-                try:
-                    sad_folder = live_drive_client.find_or_create_folder(
-                        access_token=access_token,
-                        folder_name="SAD",
-                        parent_folder_id=project.drive_folder_id,
-                    )
-                except DriveFolderCreateError as exc:
-                    raise SadSaveDriveUploadError(
-                        "Google Drive rejected the upload."
-                    ) from exc
-                target_folder_id = sad_folder.folder_id
-            record = sad_save_repository.save_preview(
-                owner_uid=user.uid,
-                owner_email=user.email,
-                repo=repo,
-                project_id=repo.active_project_id,
-                preview_record=preview_record,
-                sources=sources,
-                mode=config.drive_mode,
-                drive_client=live_drive_client,
-                secret_store=live_secret_store,
-                target_folder_id=target_folder_id,
+            record = run_sad_save(
+                user=user,
+                request=request,
+                repository=repository,
+                drive_repo_repository=drive_repo_repository,
+                source_repository=source_repository,
+                sad_save_repository=sad_save_repository,
+                config=config,
+                drive_client=drive_client,
+                secret_store=secret_store,
+                project_repository=project_repository,
             )
-        except SadSaveTokenMissingError as exc:
+        except SadSaveFlowError as exc:
             raise _sad_save_error(
-                409,
-                "SAD_SAVE_TOKEN_MISSING",
-                "Reconnect Google Drive before saving.",
-            ) from exc
-        except SadSaveTokenInvalidError as exc:
-            raise _sad_save_error(
-                401,
-                "SAD_SAVE_TOKEN_INVALID",
-                "Reconnect Google Drive to renew permission.",
-            ) from exc
-        except SadSaveDriveUploadError as exc:
-            raise _sad_save_error(
-                502,
-                "SAD_SAVE_DRIVE_UPLOAD_FAILED",
-                "Google Drive rejected the upload.",
+                exc.status_code,
+                exc.code,
+                exc.message,
             ) from exc
         return SadSaveApiResponse(
             saved=True,
