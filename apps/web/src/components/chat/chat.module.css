@@ -1,21 +1,21 @@
 .thread {
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  padding: 20px;
+  gap: 14px;
+  padding: 22px 26px;
   overflow-y: auto;
   flex: 1;
   min-height: 0;
 }
 .bubble {
-  font-size: 13.5px;
-  line-height: 1.5;
-  padding: 12px 14px;
+  font-size: 15px;
+  line-height: 1.6;
+  padding: 14px 17px;
   border-radius: 14px;
-  max-width: 80%;
+  max-width: 86%;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 7px;
 }
 .bot {
   background: var(--c-surface);
@@ -37,10 +37,11 @@
   display: flex;
   gap: 6px;
   align-items: flex-start;
-  font-size: 11.5px;
+  font-size: 12.5px;
+  line-height: 1.5;
   color: var(--c-subtle);
   border-top: 1px dashed var(--c-border);
-  padding-top: 6px;
+  padding-top: 7px;
 }
 .footer {
   display: flex;
@@ -48,41 +49,178 @@
   gap: 12px;
   padding: 0 20px 18px;
 }
-.modelBar {
+/* model picker — floating pill + custom dropdown, sits above the composer */
+.modelFloat {
   display: flex;
   justify-content: flex-end;
-  align-items: center;
-  gap: 10px;
-  padding: 11px 20px;
-  border-bottom: 1px solid var(--c-border);
-  background: var(--c-surface);
-  flex: none;
 }
-.modelPicker {
+.modelRoot {
+  position: relative;
+  display: inline-flex;
+}
+.modelPill {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 7px;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: 999px;
+  padding: 6px 11px 6px 12px;
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: var(--fw-semi);
+  color: var(--c-fg);
+  cursor: pointer;
+  box-shadow: var(--sh-1);
+  transition: background var(--motion-fast), border-color var(--motion-fast);
+}
+.modelPill:hover {
+  background: var(--c-muted);
+}
+.modelPill:focus-visible {
+  outline: 2px solid var(--c-secondary);
+  outline-offset: 2px;
+}
+.modelPill:disabled {
+  cursor: default;
+  color: var(--c-subtle);
+  opacity: 0.7;
+}
+.modelPillName {
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.modelMenu {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  width: 300px;
+  max-width: 78vw;
+  margin: 0;
+  padding: 6px;
+  list-style: none;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: 14px;
+  box-shadow: var(--sh-2);
+  z-index: 50;
+  animation: modelMenuIn var(--motion-fast) var(--ease-out);
+}
+.modelMenuUp {
+  top: auto;
+  bottom: calc(100% + 8px);
+}
+.modelItem {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 10px 11px;
+  border-radius: 10px;
+  cursor: pointer;
+}
+.modelItem:hover {
+  background: var(--c-bg);
+}
+.modelItem:focus-visible {
+  outline: none;
+  background: var(--c-bg);
+  box-shadow: inset 0 0 0 2px var(--c-ring);
+}
+.modelItemOn,
+.modelItemOn:hover {
+  background: #eff6ff;
+}
+.modelItemText {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  flex: 1;
   min-width: 0;
 }
-.modelLabel {
-  font-size: 12px;
+.modelItemName {
+  font-size: 13px;
   font-weight: var(--fw-bold);
+  color: var(--c-fg);
+}
+.modelItemHint {
+  font-size: 11.5px;
   color: var(--c-subtle);
 }
-.modelSelect {
-  max-width: 230px;
-  border: 1px solid var(--c-border);
-  border-radius: 8px;
-  background: var(--c-bg);
-  color: var(--c-fg);
+@keyframes modelMenuIn {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .modelMenu {
+    animation: none;
+  }
+}
+/* answer-options collapse bar (hybrid auto/manual) */
+.optionsBar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 28px;
+}
+.optionsLabel {
+  font-size: 12.5px;
+  font-weight: var(--fw-semi);
+  color: var(--c-subtle);
+}
+.optionsToggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   font: inherit;
   font-size: 12px;
-  padding: 6px 9px;
+  font-weight: var(--fw-semi);
+  color: var(--c-secondary);
+  background: #eff6ff;
+  border: 1px solid #dbeafe;
+  border-radius: 999px;
+  padding: 5px 11px;
+  cursor: pointer;
+  transition: background var(--motion-fast);
 }
-.modelHint {
-  font-size: 11px;
-  color: var(--c-subtle);
-  white-space: nowrap;
+.optionsToggle:hover {
+  background: #dbeafe;
+}
+.optionsToggle:focus-visible {
+  outline: 2px solid var(--c-secondary);
+  outline-offset: 2px;
+}
+.optionsCaret {
+  transition: transform var(--motion-fast) var(--ease-out);
+}
+.optionsReveal {
+  animation: optionsRevealIn var(--motion-mid) var(--ease-out);
+}
+@keyframes optionsRevealIn {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .optionsCaret {
+    transition: none;
+  }
+  .optionsReveal {
+    animation: none;
+  }
 }
 /* answer choices — aligned grid, not scattered pills */
 .chips {
@@ -91,13 +229,13 @@
   gap: 8px;
 }
 .chip {
-  font-size: 12.5px;
+  font-size: 13.5px;
   font-weight: var(--fw-semi);
   border: 1.5px solid var(--c-border);
   color: var(--c-fg);
   background: var(--c-surface);
   border-radius: var(--r-md);
-  padding: 11px 14px;
+  padding: 13px 15px;
   cursor: pointer;
   display: flex;
   gap: 9px;
@@ -171,10 +309,16 @@
 }
 /* composer */
 .composer {
-  border: 2px solid var(--c-secondary);
+  border: 1.5px solid var(--c-border);
   background: var(--c-surface);
-  border-radius: 14px;
-  padding: 10px;
+  border-radius: 16px;
+  padding: 11px 13px;
+  box-shadow: var(--sh-1);
+  transition: border-color var(--motion-fast), box-shadow var(--motion-fast);
+}
+.composer:focus-within {
+  border-color: var(--c-secondary);
+  box-shadow: 0 0 0 3px var(--c-ring);
 }
 .stage {
   display: flex;
@@ -186,8 +330,8 @@
 }
 .inputRow {
   display: flex;
-  align-items: flex-end;
-  gap: 10px;
+  align-items: center;
+  gap: 9px;
 }
 .attachBtn {
   width: 36px;
@@ -205,7 +349,7 @@
 .input {
   flex: 1;
   font: inherit;
-  font-size: 13.5px;
+  font-size: 14.5px;
   color: var(--c-fg);
   background: transparent;
   border: none;
@@ -311,17 +455,10 @@
   color: var(--c-danger);
 }
 @media (max-width: 767px) {
-  .modelBar {
-    padding: 10px 14px;
+  .modelPillName {
+    max-width: min(150px, 46vw);
   }
-  .modelPicker {
-    flex: 1;
-    justify-content: flex-end;
-  }
-  .modelSelect {
-    max-width: min(210px, 58vw);
-  }
-  .modelHint {
-    display: none;
+  .modelMenu {
+    width: min(300px, 84vw);
   }
 }

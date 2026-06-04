@@ -57,6 +57,26 @@ export function ChatPanel({
     return () => window.clearInterval(timer);
   }, [generating]);
 
+  // Hybrid answer-options collapse: auto-collapse on submit so the
+  // conversation fills the pane while SADify thinks, auto-expand when a new
+  // question arrives, and a manual chevron overrides either way.
+  const [optionsCollapsed, setOptionsCollapsed] = useState(false);
+  const questionText = qna.analysis?.next_question?.text ?? "";
+  const prevQuestionRef = useRef(questionText);
+
+  useEffect(() => {
+    if (qna.isBusy) {
+      setOptionsCollapsed(true);
+    }
+  }, [qna.isBusy]);
+
+  useEffect(() => {
+    if (questionText && questionText !== prevQuestionRef.current) {
+      prevQuestionRef.current = questionText;
+      setOptionsCollapsed(false);
+    }
+  }, [questionText]);
+
   const messages = useMemo<ChatMessage[]>(() => {
     const out: ChatMessage[] = [];
     const analysis = qna.analysis;
@@ -87,34 +107,71 @@ export function ChatPanel({
         ? "Tap one or more answers above…"
         : "Tap an answer above, or pick Other to type your own…";
 
+  const modelPicker = (
+    <ModelPicker
+      catalog={modelCatalog}
+      selectedModel={selectedModel}
+      onChange={onModelChange}
+    />
+  );
+
   const footer = qna.isQuestionnaireReady ? (
-    <div className={styles.ready}>
-      <span className={styles.readyText}>
-        <Icon name="checkCircle" size={18} color="var(--c-accent)" />
-        All required areas confirmed — your SAD is ready to draft.
-      </span>
-      {generating ? (
-        <PhaseStepper phases={GEN_PHASES} active={genPhase} />
-      ) : (
-        <Button
-          variant="primary"
-          leftIcon={<Icon name="arrowRight" size={16} color="#fff" />}
-          onClick={onGenerate}
-        >
-          Generate SAD preview
-        </Button>
-      )}
-    </div>
+    <>
+      <div className={styles.modelFloat}>{modelPicker}</div>
+      <div className={styles.ready}>
+        <span className={styles.readyText}>
+          <Icon name="checkCircle" size={18} color="var(--c-accent)" />
+          All required areas confirmed — your SAD is ready to draft.
+        </span>
+        {generating ? (
+          <PhaseStepper phases={GEN_PHASES} active={genPhase} />
+        ) : (
+          <Button
+            variant="primary"
+            leftIcon={<Icon name="arrowRight" size={16} color="#fff" />}
+            onClick={onGenerate}
+          >
+            Generate SAD preview
+          </Button>
+        )}
+      </div>
+    </>
   ) : qna.analysis ? (
     <>
       {banner}
-      <AnswerChips
-        choices={qna.analysis.next_question.choices}
-        selectedIds={qna.selectedChoiceIds}
-        selectionMode={qna.selectionMode}
-        disabled={qna.isBusy}
-        onToggle={qna.toggleChoice}
-      />
+      {qna.analysis.next_question.choices.length > 0 ? (
+        <div className={styles.optionsBar}>
+          <span className={styles.optionsLabel}>
+            {optionsCollapsed ? "Answer options hidden" : ""}
+          </span>
+          <button
+            type="button"
+            className={styles.optionsToggle}
+            aria-expanded={!optionsCollapsed}
+            onClick={() => setOptionsCollapsed((value) => !value)}
+          >
+            {optionsCollapsed ? "Show options" : "Hide options"}
+            <Icon
+              name="caretDown"
+              size={13}
+              className={styles.optionsCaret}
+              style={{ transform: optionsCollapsed ? "none" : "rotate(180deg)" }}
+            />
+          </button>
+        </div>
+      ) : null}
+      {optionsCollapsed ? null : (
+        <div className={styles.optionsReveal}>
+          <AnswerChips
+            choices={qna.analysis.next_question.choices}
+            selectedIds={qna.selectedChoiceIds}
+            selectionMode={qna.selectionMode}
+            disabled={qna.isBusy}
+            onToggle={qna.toggleChoice}
+          />
+        </div>
+      )}
+      <div className={styles.modelFloat}>{modelPicker}</div>
       <Composer
         value={qna.amendmentText}
         onChange={qna.setAmendmentText}
@@ -152,13 +209,6 @@ export function ChatPanel({
           event.target.value = "";
         }}
       />
-      <div className={styles.modelBar}>
-        <ModelPicker
-          catalog={modelCatalog}
-          selectedModel={selectedModel}
-          onChange={onModelChange}
-        />
-      </div>
       <ChatThread
         messages={messages}
         thinking={qna.isBusy && !qna.isQuestionnaireReady}

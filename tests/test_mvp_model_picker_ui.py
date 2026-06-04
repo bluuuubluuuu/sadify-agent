@@ -56,14 +56,37 @@ def test_model_picker_renders_dynamic_catalog_and_hints():
     assert "catalog.models.map" in picker
     assert "model.hint" in picker
     assert "aria-label=\"Gemini model\"" in picker
-    assert "disabled={catalog.models.length === 0}" in picker
+    assert "catalog.models.length === 0" in picker
     assert "Loading models..." in picker
     assert "gemini-2.5-pro" not in picker
     assert "ModelPicker" in chat
-    assert "modelBar" in chat
-    assert ".modelBar" in css
-    assert ".modelSelect" in css
-    assert ".modelHint" in css
+    # Picker is a floating pill above the composer / ready bar (not a top bar).
+    assert "modelFloat" in chat
+    assert ".modelPill" in css
+    assert ".modelMenu" in css
+    assert ".modelFloat" in css
+
+
+def test_answer_options_auto_collapse_and_manual_toggle_are_wired():
+    chat = (WEB_SRC / "components" / "chat" / "ChatPanel.tsx").read_text(
+        encoding="utf-8"
+    )
+    css = (WEB_SRC / "components" / "chat" / "chat.module.css").read_text(
+        encoding="utf-8"
+    )
+
+    assert "const [optionsCollapsed, setOptionsCollapsed] = useState(false)" in chat
+    assert "if (qna.isBusy)" in chat
+    assert "setOptionsCollapsed(true)" in chat
+    assert "questionText && questionText !== prevQuestionRef.current" in chat
+    assert "setOptionsCollapsed(false)" in chat
+    assert 'aria-expanded={!optionsCollapsed}' in chat
+    assert "setOptionsCollapsed((value) => !value)" in chat
+    assert "optionsCollapsed ? null" in chat
+    assert ".optionsBar" in css
+    assert ".optionsToggle" in css
+    assert ".optionsReveal" in css
+    assert "@media (prefers-reduced-motion: reduce)" in css
 
 
 def test_workspace_threads_selected_model_into_qna_and_sad_preview():
