@@ -11,14 +11,23 @@ from google.adk.tools import FunctionTool
 from google.genai import types
 from fastapi.testclient import TestClient
 
-from sadify_api.agent.approval import ApprovalStore, WriteApproval
-from sadify_api.agent.finalize import build_finalize_agent, run_finalize
-from sadify_api.agent.tools import AgentDeps
+from sadify_api.agent.approval import (
+    ApprovalStore,
+    ApprovalTokenInvalidError,
+    WriteApproval,
+    WriteApprovalRequiredError,
+)
+from sadify_api.agent.finalize import (
+    build_finalize_agent,
+    run_approved_actions,
+    run_finalize,
+)
+from sadify_api.agent.tools import AgentDeps, build_agent_tool_functions
 from sadify_api.config import ApiConfig
 from sadify_api.main import create_app
 from sadify_api.schemas import RequirementAnalysisResponse
 from sadify_api.services.analysis_state import RequirementAnalysisRepository
-from sadify_api.services.sad_flow import WikiFlowError
+from sadify_api.services.sad_flow import SadSaveFlowError, WikiFlowError
 from sadify_api.services.sad_preview import SadPreviewRepository
 from tests.api.test_sad_save import AcceptingTokenVerifier
 from tests.api.test_gemini_structured import FakeRequirementAnalysisModel, VALID_PAYLOAD
@@ -114,7 +123,8 @@ def test_build_finalize_agent_uses_adk_agent_with_task_tools():
     assert "clarify first" in agent.instruction.lower()
 
 
-def test_run_finalize_ready_generates_sad_and_completes():
+def test_run_finalize_ready_generates_sad_and_awaits_approval():
+    approval_store = ApprovalStore()
     deps, analysis_repository, _preview_repository, _analysis_model, preview_model = (
         _finalize_deps(preview_outputs=[_preview_payload()])
     )
@@ -134,15 +144,20 @@ def test_run_finalize_ready_generates_sad_and_completes():
         deps,
         analysis_session_id="session-001",
         model=model,
+        approval_store=approval_store,
     )
 
-    assert result["status"] == "completed"
+    assert result["status"] == "awaiting_approval"
     assert [event["tool"] for event in result["events"] if event["type"] == "tool"] == [
         "get_readiness",
         "generate_sad",
     ]
     assert result["result"]["preview_id"] == "SP-000001"
-    assert result["result"]["open_questions"] == VALID_PREVIEW["open_questions"]
+    assert [action["id"] for action in result["result"]["proposed_actions"]] == [
+        "save_to_drive",
+        "update_wiki",
+    ]
+    assert approval_store.get("session-001", result["result"]["approval_id"]) is not None
     assert [repair for _context, repair in preview_model.requests] == [False]
 
 
@@ -186,7 +201,7 @@ def test_run_finalize_reviews_weak_draft_regenerates_once_then_completes():
         model=model,
     )
 
-    assert result["status"] == "completed"
+    assert result["status"] == "awaiting_approval"
     assert [event["tool"] for event in result["events"] if event["type"] == "tool"] == [
         "get_readiness",
         "generate_sad",
@@ -195,7 +210,10 @@ def test_run_finalize_reviews_weak_draft_regenerates_once_then_completes():
         "review_sad",
     ]
     assert result["result"]["preview_id"] == "SP-000002"
-    assert result["result"]["review"]["verdict"] == "proceed"
+    assert [action["id"] for action in result["result"]["proposed_actions"]] == [
+        "save_to_drive",
+        "update_wiki",
+    ]
     assert [repair for _context, repair in preview_model.requests] == [False, False]
 
 
@@ -261,7 +279,7 @@ def test_run_finalize_honors_regenerate_cap_and_surfaces_remaining_issues():
         model=model,
     )
 
-    assert result["status"] == "completed"
+    assert result["status"] == "awaiting_approval"
     assert [event["tool"] for event in result["events"] if event["type"] == "tool"] == [
         "get_readiness",
         "generate_sad",
@@ -273,10 +291,10 @@ def test_run_finalize_honors_regenerate_cap_and_surfaces_remaining_issues():
         "generate_sad",
     ]
     assert result["result"]["preview_id"] == "SP-000003"
-    assert result["result"]["review"]["regenerate_cap_reached"] is True
-    assert "Review remaining issue: Workflow still needs tightening." in result[
-        "result"
-    ]["open_questions"]
+    assert [action["id"] for action in result["result"]["proposed_actions"]] == [
+        "save_to_drive",
+        "update_wiki",
+    ]
     assert len(preview_model.requests) == 3
 
 
@@ -370,7 +388,7 @@ def test_run_finalize_unapproved_write_returns_approval_request_without_writes()
     assert approval_store.get("session-001", result["result"]["approval_id"]) is not None
 
 
-def test_run_finalize_with_valid_approval_executes_save_and_wiki():
+def test_run_approved_actions_executes_save_and_wiki_without_llm_and_consumes_token():
     save_calls = []
     wiki_calls = []
 
@@ -412,21 +430,10 @@ def test_run_finalize_with_valid_approval_executes_save_and_wiki():
         )
     )
     _save_ready_analysis(analysis_repository)
-    model = ScriptedLlm(
-        responses=[
-            _function_call("save_to_drive", {"preview_id": "SP-000001"}),
-            _function_call("update_wiki", {}),
-            types.Content(
-                role="model",
-                parts=[types.Part.from_text(text="Approved writes completed.")],
-            ),
-        ]
-    )
 
-    result = run_finalize(
+    result = run_approved_actions(
         deps,
         analysis_session_id="session-001",
-        model=model,
         approval_store=approval_store,
         approval_id=approval_id,
     )
@@ -441,7 +448,109 @@ def test_run_finalize_with_valid_approval_executes_save_and_wiki():
     assert approval_store.get("session-001", approval_id) is None
 
 
-def test_run_finalize_wiki_conflict_requires_reapproval():
+def test_run_approved_actions_hard_write_error_leaves_token_for_retry():
+    save_calls = []
+
+    def fake_save_runner(**kwargs):
+        save_calls.append(kwargs)
+        raise SadSaveFlowError(
+            409,
+            "SAD_SAVE_REPO_REQUIRED",
+            "Connect a Google Drive project repo before saving.",
+        )
+
+    approval_store = ApprovalStore()
+    approval_id = approval_store.create(
+        "session-001",
+        [
+            {
+                "id": "save_to_drive",
+                "label": "Save SAD to Google Drive",
+                "preview_id": "SP-000001",
+            }
+        ],
+    )
+    deps, analysis_repository, _preview_repository, _analysis_model, _preview_model = (
+        _finalize_deps(sad_save_runner=fake_save_runner)
+    )
+    _save_ready_analysis(analysis_repository)
+
+    result = run_approved_actions(
+        deps,
+        analysis_session_id="session-001",
+        approval_store=approval_store,
+        approval_id=approval_id,
+    )
+
+    assert result["status"] == "awaiting_approval"
+    assert result["result"]["error"]["code"] == "SAD_SAVE_REPO_REQUIRED"
+    assert len(save_calls) == 1
+    assert approval_store.get("session-001", approval_id) is not None
+
+
+def test_run_approved_actions_missing_token_refuses_without_write():
+    calls = []
+
+    def fake_save_runner(**kwargs):
+        calls.append(kwargs)
+        return FakeSaveRecord(
+            save_id="SV-SHOULD-NOT-WRITE",
+            preview_id=kwargs["request"].preview_id,
+        )
+
+    deps, *_ = _finalize_deps(sad_save_runner=fake_save_runner)
+
+    try:
+        run_approved_actions(
+            deps,
+            analysis_session_id="session-001",
+            approval_store=ApprovalStore(),
+            approval_id="AP-missing",
+        )
+    except ApprovalTokenInvalidError:
+        pass
+    else:
+        raise AssertionError("missing approval token must be refused")
+
+    assert calls == []
+
+
+def test_write_tool_mismatched_preview_refuses_without_write():
+    calls = []
+
+    def fake_save_runner(**kwargs):
+        calls.append(kwargs)
+        return FakeSaveRecord(
+            save_id="SV-SHOULD-NOT-WRITE",
+            preview_id=kwargs["request"].preview_id,
+        )
+
+    deps, *_ = _finalize_deps(
+        write_approval=WriteApproval(
+            approval_id="AP-test",
+            actions=[
+                {
+                    "id": "save_to_drive",
+                    "label": "Save SAD to Google Drive",
+                    "preview_id": "SP-000001",
+                }
+            ],
+        ),
+        sad_save_runner=fake_save_runner,
+    )
+    tool_functions = build_agent_tool_functions(deps)
+
+    try:
+        tool_functions.save_to_drive("SP-000002")
+    except WriteApprovalRequiredError:
+        pass
+    else:
+        raise AssertionError("mismatched preview approval must be refused")
+
+    assert calls == []
+
+
+def test_run_approved_actions_wiki_conflict_consumes_original_and_reapproves():
     def fake_wiki_context_builder(_deps):
         return object()
 
@@ -471,20 +580,10 @@ def test_run_finalize_wiki_conflict_requires_reapproval():
         )
     )
     _save_ready_analysis(analysis_repository)
-    model = ScriptedLlm(
-        responses=[
-            _function_call("update_wiki", {}),
-            types.Content(
-                role="model",
-                parts=[types.Part.from_text(text="Overwrite approval required.")],
-            ),
-        ]
-    )
 
-    result = run_finalize(
+    result = run_approved_actions(
         deps,
         analysis_session_id="session-001",
-        model=model,
         approval_store=approval_store,
         approval_id=approval_id,
     )
@@ -499,6 +598,8 @@ def test_run_finalize_wiki_conflict_requires_reapproval():
             "force_overwrite": True,
         }
     ]
+    assert approval_store.get("session-001", approval_id) is None
+    assert approval_store.get("session-001", result["result"]["approval_id"]) is not None
 
 
 def test_run_finalize_not_ready_asks_one_clarification_and_stops():
@@ -599,17 +700,15 @@ def test_agent_finalize_route_resolves_model_and_returns_response(monkeypatch):
 def test_agent_approve_route_requires_auth_and_passes_approval(monkeypatch):
     captured = {}
 
-    def fake_run_finalize(
+    def fake_run_approved_actions(
         deps,
         *,
         analysis_session_id: str,
-        model: str,
         approval_store,
         approval_id: str | None = None,
     ):
         captured["deps"] = deps
         captured["analysis_session_id"] = analysis_session_id
-        captured["model"] = model
         captured["approval_store"] = approval_store
         captured["approval_id"] = approval_id
         return {
@@ -626,7 +725,7 @@ def test_agent_approve_route_requires_auth_and_passes_approval(monkeypatch):
 
     from sadify_api.routes import agent as agent_route
 
-    monkeypatch.setattr(agent_route, "run_finalize", fake_run_finalize)
+    monkeypatch.setattr(agent_route, "run_approved_actions", fake_run_approved_actions)
     client = TestClient(
         create_app(
             config=ApiConfig(environment="test", sadify_model="gemini-2.5-flash"),
@@ -650,7 +749,6 @@ def test_agent_approve_route_requires_auth_and_passes_approval(monkeypatch):
     assert response.json()["status"] == "completed"
     assert captured["analysis_session_id"] == "session-route"
     assert captured["approval_id"] == "AP-route"
-    assert captured["model"] == "gemini-2.5-flash"
     assert captured["deps"].user.uid == "firebase-uid-001"
 
 

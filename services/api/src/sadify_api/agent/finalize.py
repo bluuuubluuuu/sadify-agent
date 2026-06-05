@@ -14,7 +14,11 @@ from sadify_api.agent.approval import (
     WriteApprovalRequiredError,
 )
 from sadify_api.agent.instruction import SADIFY_AGENT_INSTRUCTION
-from sadify_api.agent.tools import AgentDeps, build_agent_tools
+from sadify_api.agent.tools import (
+    AgentDeps,
+    build_agent_tool_functions,
+    build_agent_tools,
+)
 
 FinalizeStatus = Literal["asked_clarification", "awaiting_approval", "completed"]
 REGENERATE_CAP = 2
@@ -112,10 +116,117 @@ def run_finalize(
         }
 
     status, result = _final_status(tool_results)
+    if status == "completed" and _is_ready_preview_result(result):
+        new_approval_id = store.create(
+            analysis_session_id,
+            _save_and_wiki_actions(str(result["preview_id"])),
+        )
+        approval_result = dict(result)
+        approval_result["approval_id"] = new_approval_id
+        approval_result["proposed_actions"] = _save_and_wiki_actions(
+            str(result["preview_id"])
+        )
+        return {
+            "status": "awaiting_approval",
+            "events": events,
+            "result": approval_result,
+        }
     return {
         "status": status,
         "events": events,
         "result": result,
+    }
+
+
+def run_approved_actions(
+    deps: AgentDeps,
+    *,
+    analysis_session_id: str,
+    approval_store: ApprovalStore,
+    approval_id: str,
+) -> dict[str, Any]:
+    approval = approval_store.get(analysis_session_id, approval_id)
+    if approval is None:
+        raise ApprovalTokenInvalidError("Approval token is missing or already used.")
+
+    tool_functions = build_agent_tool_functions(
+        replace(deps, write_approval=approval),
+    )
+    actions = _ordered_actions(approval.actions)
+    results = []
+    for action in actions:
+        action_id = str(action.get("id") or "")
+        try:
+            if action_id == "save_to_drive":
+                preview_id = str(action.get("preview_id") or "")
+                if not preview_id:
+                    raise ApprovalTokenInvalidError(
+                        "Approved save action has no preview."
+                    )
+                response = tool_functions.save_to_drive(preview_id)
+            elif action_id == "update_wiki":
+                response = tool_functions.update_wiki(False)
+            elif action_id == "overwrite_wiki":
+                response = tool_functions.update_wiki(True)
+            else:
+                raise ApprovalTokenInvalidError(f"Unknown approved action: {action_id}")
+        except WriteApprovalRequiredError as exc:
+            approval_store.consume(analysis_session_id, approval_id)
+            new_approval_id = approval_store.create(
+                analysis_session_id,
+                exc.proposed_actions,
+            )
+            return {
+                "status": "awaiting_approval",
+                "events": [
+                    {
+                        "type": "tool",
+                        "tool": exc.tool_name,
+                        "summary": exc.message,
+                    }
+                ],
+                "result": _approval_result(
+                    approval_id=new_approval_id,
+                    error=exc,
+                    tool_results=[],
+                ),
+            }
+
+        if response.get("status") == "error":
+            return {
+                "status": "awaiting_approval",
+                "events": [
+                    {
+                        "type": "tool",
+                        "tool": action_id,
+                        "summary": str(
+                            response.get("message") or "Approved action failed."
+                        ),
+                    }
+                ],
+                "result": {
+                    "approval_id": approval_id,
+                    "proposed_actions": approval.actions,
+                    "error": {
+                        "code": response.get("code"),
+                        "message": response.get("message"),
+                    },
+                },
+            }
+        results.append({"tool": action_id, **response})
+
+    approval_store.consume(analysis_session_id, approval_id)
+    return {
+        "status": "completed",
+        "events": [
+            {
+                "type": "tool",
+                "tool": result["tool"],
+                "summary": _tool_summary(result["tool"], result),
+            }
+            for result in results
+        ],
+        "result": {"actions": results},
     }
 
 
@@ -131,6 +242,30 @@ def _consume_approval(
     if approval is None:
         raise ApprovalTokenInvalidError("Approval token is missing or already used.")
     return approval
+
+
+def _ordered_actions(actions: list[dict[str, object]]) -> list[dict[str, object]]:
+    order = {"save_to_drive": 0, "update_wiki": 1, "overwrite_wiki": 1}
+    return sorted(actions, key=lambda action: order.get(str(action.get("id")), 99))
+
+
+def _is_ready_preview_result(result: dict[str, Any] | None) -> bool:
+    return isinstance(result, dict) and bool(result.get("preview_id"))
+
+
+def _save_and_wiki_actions(preview_id: str) -> list[dict[str, object]]:
+    return [
+        {
+            "id": "save_to_drive",
+            "label": "Save SAD to Google Drive",
+            "preview_id": preview_id,
+        },
+        {
+            "id": "update_wiki",
+            "label": "Update project wiki",
+            "preview_id": preview_id,
+        },
+    ]
 
 
 def _with_selected_model(deps: AgentDeps, model: str | BaseLlm) -> AgentDeps:
@@ -160,9 +295,8 @@ def _finalize_message(
         "preview. If review_sad says regenerate, you may call generate_sad again "
         "and review the new draft. If it says ask, stop and return that need for "
         "clarification. If it says proceed or tighten, stop with the best draft. "
-        "When a draft is ready and no approval is granted, call the write tool "
-        "that matches the action you want so the backend can request explicit "
-        "approval. Do not write to Drive, wiki, or GitHub without approval."
+        "The backend will request explicit approval after a ready draft. Do not "
+        "write to Drive, wiki, or GitHub without approval."
     )
     if approval is not None:
         prompt += (

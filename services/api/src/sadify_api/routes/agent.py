@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Header, HTTPException
 
 from sadify_api.agent.approval import ApprovalStore, ApprovalTokenInvalidError
-from sadify_api.agent.finalize import run_finalize
+from sadify_api.agent.finalize import run_approved_actions, run_finalize
 from sadify_api.agent.tools import AgentDeps
 from sadify_api.config import ApiConfig
 from sadify_api.routes.auth import verify_authorization_header
@@ -67,12 +67,13 @@ def create_agent_router(
         authorization: str | None = Header(default=None),
     ) -> AgentFinalizeResponse:
         user = verify_authorization_header(authorization, token_verifier)
-        resolved_model = resolve_gemini_model(request.model, config)
         try:
-            result = run_finalize(
-                _agent_deps(resolved_model=resolved_model, user=user),
+            result = run_approved_actions(
+                _agent_deps(
+                    resolved_model=resolve_gemini_model(request.model, config),
+                    user=user,
+                ),
                 analysis_session_id=request.analysis_session_id,
-                model=resolved_model,
                 approval_store=approval_store,
                 approval_id=request.approval_id,
             )
