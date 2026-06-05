@@ -108,6 +108,14 @@ def create_app(
             analysis_repository=analysis_repository,
             sad_preview_model=sad_preview_model,
             sad_preview_repository=sad_preview_repository,
+            token_verifier=token_verifier,
+            drive_repo_repository=drive_repo_repository,
+            source_repository=source_repository,
+            sad_save_repository=sad_save_repository,
+            drive_client=drive_client,
+            secret_store=secret_store,
+            wiki_state_repository=wiki_state_repository,
+            project_repository=project_repository,
             sad_review_model=sad_review_model,
         )
     )

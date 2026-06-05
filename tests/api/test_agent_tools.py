@@ -2,6 +2,7 @@ import json
 
 from google.adk.tools import FunctionTool
 
+from sadify_api.agent.approval import WriteApproval, WriteApprovalRequiredError
 from sadify_api.agent.instruction import SADIFY_AGENT_INSTRUCTION
 from sadify_api.agent.tools import (
     AgentDeps,
@@ -44,6 +45,8 @@ def test_build_agent_tools_exposes_adk_function_tools():
         "ask_clarification",
         "generate_sad",
         "review_sad",
+        "save_to_drive",
+        "update_wiki",
     ]
     assert all(isinstance(tool, FunctionTool) for tool in tools)
     assert all(tool.description for tool in tools)
@@ -167,11 +170,66 @@ def test_review_sad_returns_structured_advisory_verdict():
     }
 
 
+def test_write_tools_raise_without_matching_approval():
+    deps, *_ = _agent_deps()
+    tool_functions = build_agent_tool_functions(deps)
+
+    try:
+        tool_functions.save_to_drive("SP-000001")
+    except WriteApprovalRequiredError as exc:
+        assert exc.preview_id == "SP-000001"
+        assert [action["id"] for action in exc.proposed_actions] == [
+            "save_to_drive",
+            "update_wiki",
+        ]
+    else:
+        raise AssertionError("save_to_drive must refuse without approval")
+
+
+def test_write_tool_accepts_matching_approval_and_runs_injected_save():
+    calls = []
+
+    def fake_save_runner(**kwargs):
+        calls.append(kwargs)
+        return FakeSaveRecord(
+            save_id="SV-AGENT",
+            preview_id=kwargs["request"].preview_id,
+        )
+
+    deps, *_ = _agent_deps(
+        write_approval=WriteApproval(
+            approval_id="AP-test",
+            actions=[
+                {
+                    "id": "save_to_drive",
+                    "label": "Save SAD to Google Drive",
+                    "preview_id": "SP-000001",
+                }
+            ],
+        ),
+        sad_save_runner=fake_save_runner,
+    )
+    tool_functions = build_agent_tool_functions(deps)
+
+    result = tool_functions.save_to_drive("SP-000001")
+
+    assert result == {
+        "status": "saved",
+        "save_id": "SV-AGENT",
+        "preview_id": "SP-000001",
+        "doc_url": "https://docs.example/SV-AGENT",
+        "doc_path": "SAD/SV-AGENT",
+    }
+    assert len(calls) == 1
+
+
 def _agent_deps(
     *,
     analysis_outputs: list[dict[str, object]] | None = None,
     preview_outputs: list[dict[str, object]] | None = None,
     review_outputs: list[dict[str, object]] | None = None,
+    write_approval: WriteApproval | None = None,
+    sad_save_runner=None,
 ):
     analysis_repository = RequirementAnalysisRepository()
     preview_repository = SadPreviewRepository()
@@ -187,6 +245,9 @@ def _agent_deps(
             analysis_model=analysis_model,
             sad_preview_model=preview_model,
             sad_review_model=review_model,
+            user=FakeUser(),
+            write_approval=write_approval,
+            sad_save_runner=sad_save_runner,
         ),
         analysis_repository,
         preview_repository,
@@ -227,3 +288,21 @@ class FakeSadReviewModel:
     def review_sad(self, context: str, *, model: str | None = None) -> str:
         self.requests.append((context, model))
         return json.dumps(self.outputs.pop(0))
+
+
+class FakeUser:
+    uid = "firebase-uid-001"
+    email = "owner@example.com"
+
+
+class FakeArtifact:
+    def __init__(self, save_id: str) -> None:
+        self.url = f"https://docs.example/{save_id}"
+        self.path = f"SAD/{save_id}"
+
+
+class FakeSaveRecord:
+    def __init__(self, *, save_id: str, preview_id: str) -> None:
+        self.save_id = save_id
+        self.preview_id = preview_id
+        self.sad_doc = FakeArtifact(save_id)

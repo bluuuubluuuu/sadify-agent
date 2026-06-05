@@ -11,13 +11,16 @@ from google.adk.tools import FunctionTool
 from google.genai import types
 from fastapi.testclient import TestClient
 
+from sadify_api.agent.approval import ApprovalStore, WriteApproval
 from sadify_api.agent.finalize import build_finalize_agent, run_finalize
 from sadify_api.agent.tools import AgentDeps
 from sadify_api.config import ApiConfig
 from sadify_api.main import create_app
 from sadify_api.schemas import RequirementAnalysisResponse
 from sadify_api.services.analysis_state import RequirementAnalysisRepository
+from sadify_api.services.sad_flow import WikiFlowError
 from sadify_api.services.sad_preview import SadPreviewRepository
+from tests.api.test_sad_save import AcceptingTokenVerifier
 from tests.api.test_gemini_structured import FakeRequirementAnalysisModel, VALID_PAYLOAD
 from tests.api.test_sad_preview import (
     FakeSadPreviewModel,
@@ -105,6 +108,8 @@ def test_build_finalize_agent_uses_adk_agent_with_task_tools():
         "ask_clarification",
         "generate_sad",
         "review_sad",
+        "save_to_drive",
+        "update_wiki",
     ]
     assert "clarify first" in agent.instruction.lower()
 
@@ -319,6 +324,183 @@ def test_run_finalize_review_ask_verdict_returns_asked_clarification():
     )
 
 
+def test_run_finalize_unapproved_write_returns_approval_request_without_writes():
+    calls = []
+
+    def fake_save_runner(**kwargs):
+        calls.append(kwargs)
+        return FakeSaveRecord(
+            save_id="SV-SHOULD-NOT-WRITE",
+            preview_id=kwargs["request"].preview_id,
+        )
+
+    approval_store = ApprovalStore()
+    deps, analysis_repository, _preview_repository, _analysis_model, _preview_model = (
+        _finalize_deps(sad_save_runner=fake_save_runner)
+    )
+    record = _save_ready_analysis(analysis_repository)
+    model = ScriptedLlm(
+        responses=[
+            _function_call("get_readiness", {"analysis_id": record.analysis_id}),
+            _function_call("generate_sad", {"analysis_id": record.analysis_id}),
+            _function_call("review_sad", {"preview_id": "SP-000001"}),
+            _function_call("save_to_drive", {"preview_id": "SP-000001"}),
+            types.Content(
+                role="model",
+                parts=[types.Part.from_text(text="Approval required.")],
+            ),
+        ]
+    )
+
+    result = run_finalize(
+        deps,
+        analysis_session_id="session-001",
+        model=model,
+        approval_store=approval_store,
+    )
+
+    assert result["status"] == "awaiting_approval"
+    assert result["result"]["preview_id"] == "SP-000001"
+    assert result["result"]["approval_id"].startswith("AP-")
+    assert [action["id"] for action in result["result"]["proposed_actions"]] == [
+        "save_to_drive",
+        "update_wiki",
+    ]
+    assert calls == []
+    assert approval_store.get("session-001", result["result"]["approval_id"]) is not None
+
+
+def test_run_finalize_with_valid_approval_executes_save_and_wiki():
+    save_calls = []
+    wiki_calls = []
+
+    def fake_save_runner(**kwargs):
+        save_calls.append(kwargs)
+        return FakeSaveRecord(
+            save_id="SV-APPROVED",
+            preview_id=kwargs["request"].preview_id,
+        )
+
+    def fake_wiki_context_builder(_deps):
+        return object()
+
+    def fake_wiki_update_runner(**kwargs):
+        wiki_calls.append(kwargs)
+        return FakeWikiUpdateResponse(file_count=2)
+
+    approval_store = ApprovalStore()
+    approval_id = approval_store.create(
+        "session-001",
+        [
+            {
+                "id": "save_to_drive",
+                "label": "Save SAD to Google Drive",
+                "preview_id": "SP-000001",
+            },
+            {
+                "id": "update_wiki",
+                "label": "Update project wiki",
+                "preview_id": "SP-000001",
+            },
+        ],
+    )
+    deps, analysis_repository, _preview_repository, _analysis_model, _preview_model = (
+        _finalize_deps(
+            sad_save_runner=fake_save_runner,
+            wiki_context_builder=fake_wiki_context_builder,
+            wiki_update_runner=fake_wiki_update_runner,
+        )
+    )
+    _save_ready_analysis(analysis_repository)
+    model = ScriptedLlm(
+        responses=[
+            _function_call("save_to_drive", {"preview_id": "SP-000001"}),
+            _function_call("update_wiki", {}),
+            types.Content(
+                role="model",
+                parts=[types.Part.from_text(text="Approved writes completed.")],
+            ),
+        ]
+    )
+
+    result = run_finalize(
+        deps,
+        analysis_session_id="session-001",
+        model=model,
+        approval_store=approval_store,
+        approval_id=approval_id,
+    )
+
+    assert result["status"] == "completed"
+    assert [action["tool"] for action in result["result"]["actions"]] == [
+        "save_to_drive",
+        "update_wiki",
+    ]
+    assert save_calls[0]["request"].preview_id == "SP-000001"
+    assert wiki_calls[0]["request"].force_overwrite is False
+    assert approval_store.get("session-001", approval_id) is None
+
+
+def test_run_finalize_wiki_conflict_requires_reapproval():
+    def fake_wiki_context_builder(_deps):
+        return object()
+
+    def fake_wiki_update_runner(**kwargs):
+        raise WikiFlowError(
+            409,
+            "WIKI_CONFLICT",
+            "The wiki was changed in Drive since SADify last wrote it. Confirm overwrite.",
+            changed_files=["workflows.md"],
+        )
+
+    approval_store = ApprovalStore()
+    approval_id = approval_store.create(
+        "session-001",
+        [
+            {
+                "id": "update_wiki",
+                "label": "Update project wiki",
+                "preview_id": "SP-000001",
+            }
+        ],
+    )
+    deps, analysis_repository, _preview_repository, _analysis_model, _preview_model = (
+        _finalize_deps(
+            wiki_context_builder=fake_wiki_context_builder,
+            wiki_update_runner=fake_wiki_update_runner,
+        )
+    )
+    _save_ready_analysis(analysis_repository)
+    model = ScriptedLlm(
+        responses=[
+            _function_call("update_wiki", {}),
+            types.Content(
+                role="model",
+                parts=[types.Part.from_text(text="Overwrite approval required.")],
+            ),
+        ]
+    )
+
+    result = run_finalize(
+        deps,
+        analysis_session_id="session-001",
+        model=model,
+        approval_store=approval_store,
+        approval_id=approval_id,
+    )
+
+    assert result["status"] == "awaiting_approval"
+    assert result["result"]["changed_files"] == ["workflows.md"]
+    assert result["result"]["proposed_actions"] == [
+        {
+            "id": "overwrite_wiki",
+            "label": "Overwrite changed wiki files",
+            "changed_files": ["workflows.md"],
+            "force_overwrite": True,
+        }
+    ]
+
+
 def test_run_finalize_not_ready_asks_one_clarification_and_stops():
     deps, analysis_repository, _preview_repository, analysis_model, _preview_model = (
         _finalize_deps(analysis_outputs=[_analysis_payload()])
@@ -358,10 +540,17 @@ def test_run_finalize_not_ready_asks_one_clarification_and_stops():
 def test_agent_finalize_route_resolves_model_and_returns_response(monkeypatch):
     captured = {}
 
-    def fake_run_finalize(deps, *, analysis_session_id: str, model: str):
+    def fake_run_finalize(
+        deps,
+        *,
+        analysis_session_id: str,
+        model: str,
+        approval_store,
+    ):
         captured["deps"] = deps
         captured["analysis_session_id"] = analysis_session_id
         captured["model"] = model
+        captured["approval_store"] = approval_store
         return {
             "status": "completed",
             "events": [
@@ -407,6 +596,64 @@ def test_agent_finalize_route_resolves_model_and_returns_response(monkeypatch):
     assert captured["model"] == "gemini-2.5-flash"
 
 
+def test_agent_approve_route_requires_auth_and_passes_approval(monkeypatch):
+    captured = {}
+
+    def fake_run_finalize(
+        deps,
+        *,
+        analysis_session_id: str,
+        model: str,
+        approval_store,
+        approval_id: str | None = None,
+    ):
+        captured["deps"] = deps
+        captured["analysis_session_id"] = analysis_session_id
+        captured["model"] = model
+        captured["approval_store"] = approval_store
+        captured["approval_id"] = approval_id
+        return {
+            "status": "completed",
+            "events": [
+                {
+                    "type": "tool",
+                    "tool": "save_to_drive",
+                    "summary": "Saved SAD preview.",
+                }
+            ],
+            "result": {"actions": [{"tool": "save_to_drive"}]},
+        }
+
+    from sadify_api.routes import agent as agent_route
+
+    monkeypatch.setattr(agent_route, "run_finalize", fake_run_finalize)
+    client = TestClient(
+        create_app(
+            config=ApiConfig(environment="test", sadify_model="gemini-2.5-flash"),
+            token_verifier=AcceptingTokenVerifier(),
+            analysis_repository=RequirementAnalysisRepository(),
+            sad_preview_repository=SadPreviewRepository(),
+        )
+    )
+
+    response = client.post(
+        "/agent/approve",
+        headers={"Authorization": "Bearer firebase-test-token"},
+        json={
+            "analysis_session_id": "session-route",
+            "approval_id": "AP-route",
+            "model": "not-in-catalog",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "completed"
+    assert captured["analysis_session_id"] == "session-route"
+    assert captured["approval_id"] == "AP-route"
+    assert captured["model"] == "gemini-2.5-flash"
+    assert captured["deps"].user.uid == "firebase-uid-001"
+
+
 class ScriptedLlm(BaseLlm):
     responses: list[types.Content]
     requests_seen: list[LlmRequest]
@@ -429,6 +676,10 @@ def _finalize_deps(
     analysis_outputs: list[dict[str, object]] | None = None,
     preview_outputs: list[dict[str, object]] | None = None,
     review_outputs: list[dict[str, object]] | None = None,
+    write_approval: WriteApproval | None = None,
+    sad_save_runner=None,
+    wiki_context_builder=None,
+    wiki_update_runner=None,
 ):
     analysis_repository = RequirementAnalysisRepository()
     preview_repository = SadPreviewRepository()
@@ -444,6 +695,11 @@ def _finalize_deps(
             analysis_model=analysis_model,
             sad_preview_model=preview_model,
             sad_review_model=review_model,
+            user=FakeUser(),
+            write_approval=write_approval,
+            sad_save_runner=sad_save_runner,
+            wiki_context_builder=wiki_context_builder,
+            wiki_update_runner=wiki_update_runner,
         ),
         analysis_repository,
         preview_repository,
@@ -501,3 +757,26 @@ class FakeSadReviewModel:
     def review_sad(self, context: str, *, model: str | None = None) -> str:
         self.requests.append((context, model))
         return json.dumps(self.outputs.pop(0))
+
+
+class FakeUser:
+    uid = "firebase-uid-001"
+    email = "owner@example.com"
+
+
+class FakeArtifact:
+    def __init__(self, save_id: str) -> None:
+        self.url = f"https://docs.example/{save_id}"
+        self.path = f"SAD/{save_id}"
+
+
+class FakeSaveRecord:
+    def __init__(self, *, save_id: str, preview_id: str) -> None:
+        self.save_id = save_id
+        self.preview_id = preview_id
+        self.sad_doc = FakeArtifact(save_id)
+
+
+class FakeWikiUpdateResponse:
+    def __init__(self, *, file_count: int) -> None:
+        self.files = [object() for _index in range(file_count)]

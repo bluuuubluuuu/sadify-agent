@@ -48,6 +48,12 @@ class AgentFinalizeRequest(ApiModel):
     model: str | None = None
 
 
+class AgentApproveRequest(ApiModel):
+    analysis_session_id: str = Field(min_length=1)
+    approval_id: str = Field(min_length=1)
+    model: str | None = None
+
+
 class AgentEvent(ApiModel):
     type: Literal["tool", "message"]
     tool: str | None = None
