@@ -11,6 +11,7 @@ from sadify_api.agent.instruction import SADIFY_AGENT_INSTRUCTION
 from sadify_api.agent.tools import AgentDeps, build_agent_tools
 
 FinalizeStatus = Literal["asked_clarification", "awaiting_approval", "completed"]
+REGENERATE_CAP = 2
 
 
 def build_finalize_agent(deps: AgentDeps, model: str | BaseLlm) -> Agent:
@@ -70,8 +71,12 @@ def run_finalize(
 
 def _with_selected_model(deps: AgentDeps, model: str | BaseLlm) -> AgentDeps:
     if isinstance(model, str):
-        return replace(deps, selected_model=model)
-    return deps
+        return replace(
+            deps,
+            selected_model=model,
+            max_sad_generations=REGENERATE_CAP + 1,
+        )
+    return replace(deps, max_sad_generations=REGENERATE_CAP + 1)
 
 
 def _finalize_message(
@@ -86,7 +91,10 @@ def _finalize_message(
         f"latest_analysis_id: {latest_analysis_id}\n"
         "First inspect readiness when an analysis id is available. "
         "If it is not ready enough, call ask_clarification once and stop. "
-        "If it is ready enough, call generate_sad and stop. "
+        "If it is ready enough, call generate_sad, then call review_sad on the "
+        "preview. If review_sad says regenerate, you may call generate_sad again "
+        "and review the new draft. If it says ask, stop and return that need for "
+        "clarification. If it says proceed or tighten, stop with the best draft. "
         "Do not write to Drive, wiki, or GitHub in this phase."
     )
     return types.Content(
@@ -101,9 +109,45 @@ def _final_status(
     for tool_name, response in reversed(tool_results):
         if tool_name == "ask_clarification":
             return "asked_clarification", response
-        if tool_name == "generate_sad":
-            return "completed", response
+        if tool_name == "review_sad" and response.get("verdict") == "ask":
+            return "asked_clarification", response
+    latest_review = _latest_tool_result(tool_results, "review_sad")
+    latest_preview = _latest_tool_result(tool_results, "generate_sad")
+    if latest_preview is not None:
+        result = dict(latest_preview)
+        if latest_review is not None:
+            result["review"] = latest_review
+            if latest_review.get("regenerate_cap_reached"):
+                result["open_questions"] = _open_questions_with_review_issues(
+                    result.get("open_questions", []),
+                    latest_review,
+                )
+        return "completed", result
     return "awaiting_approval", None
+
+
+def _latest_tool_result(
+    tool_results: list[tuple[str, dict[str, Any]]],
+    tool_name: str,
+) -> dict[str, Any] | None:
+    for candidate_name, response in reversed(tool_results):
+        if candidate_name == tool_name:
+            return response
+    return None
+
+
+def _open_questions_with_review_issues(
+    open_questions: Any,
+    review: dict[str, Any],
+) -> list[str]:
+    merged = list(open_questions) if isinstance(open_questions, list) else []
+    for issue in review.get("issues", []):
+        if not isinstance(issue, dict):
+            continue
+        message = str(issue.get("message") or "").strip()
+        if message:
+            merged.append(f"Review remaining issue: {message}")
+    return merged
 
 
 def _tool_summary(tool_name: str, response: dict[str, Any]) -> str:
@@ -121,4 +165,9 @@ def _tool_summary(tool_name: str, response: dict[str, Any]) -> str:
         if preview_id:
             return f"Generated SAD preview {preview_id}."
         return "Generated a SAD preview."
+    if tool_name == "review_sad":
+        verdict = response.get("verdict", "reviewed")
+        issues = response.get("issues", [])
+        issue_count = len(issues) if isinstance(issues, list) else 0
+        return f"Reviewed SAD draft: {verdict} ({issue_count} issues)."
     return f"Ran {tool_name}."

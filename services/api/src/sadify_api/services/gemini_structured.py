@@ -2,7 +2,11 @@ from collections.abc import Callable
 from typing import Protocol
 
 from sadify_api.config import ApiConfig
-from sadify_api.schemas import RequirementAnalysisResponse, SadPreviewResponse
+from sadify_api.schemas import (
+    RequirementAnalysisResponse,
+    SadPreviewResponse,
+    SadReviewResponse,
+)
 from sadify_api.services.model_catalog import backend_default_model, resolve_gemini_model
 from sadify_api.services.questionnaire_plan import canonical_required_slots
 
@@ -29,12 +33,26 @@ class SadPreviewModel(Protocol):
         """Return model output as raw JSON text."""
 
 
+class SadReviewModel(Protocol):
+    def review_sad(
+        self,
+        context: str,
+        *,
+        model: str | None = None,
+    ) -> str:
+        """Return structured self-audit output as raw JSON text."""
+
+
 def parse_requirement_analysis(raw_json: str) -> RequirementAnalysisResponse:
     return RequirementAnalysisResponse.model_validate_json(raw_json)
 
 
 def parse_sad_preview(raw_json: str) -> SadPreviewResponse:
     return SadPreviewResponse.model_validate_json(raw_json)
+
+
+def parse_sad_review(raw_json: str) -> SadReviewResponse:
+    return SadReviewResponse.model_validate_json(raw_json)
 
 
 def requirement_analysis_schema() -> dict[str, object]:
@@ -298,6 +316,36 @@ def sad_preview_schema() -> dict[str, object]:
     }
 
 
+def sad_review_schema() -> dict[str, object]:
+    return {
+        "type": "OBJECT",
+        "properties": {
+            "verdict": {
+                "type": "STRING",
+                "enum": ["proceed", "tighten", "regenerate", "ask"],
+            },
+            "issues": {
+                "type": "ARRAY",
+                "items": {
+                    "type": "OBJECT",
+                    "properties": {
+                        "severity": {
+                            "type": "STRING",
+                            "enum": ["low", "medium", "high"],
+                        },
+                        "category": {"type": "STRING"},
+                        "message": {"type": "STRING"},
+                    },
+                    "required": ["severity", "category", "message"],
+                    "propertyOrdering": ["severity", "category", "message"],
+                },
+            },
+        },
+        "required": ["verdict", "issues"],
+        "propertyOrdering": ["verdict", "issues"],
+    }
+
+
 ClientFactory = Callable[[], object]
 
 
@@ -484,6 +532,32 @@ class GeminiSadPreviewModel:
         return response.text or ""
 
 
+class GeminiSadReviewModel:
+    def __init__(
+        self,
+        config: ApiConfig,
+        client_factory: ClientFactory | None = None,
+    ) -> None:
+        self._config = config
+        self._client_factory = client_factory or (lambda: _create_genai_client(config))
+
+    def review_sad(
+        self,
+        context: str,
+        *,
+        model: str | None = None,
+    ) -> str:
+        client = self._client_factory()
+        response = _generate_content_with_model_fallback(
+            client=client,
+            requested_model=model,
+            config=self._config,
+            contents=_sad_review_prompt(context),
+            response_schema=sad_review_schema(),
+        )
+        return response.text or ""
+
+
 def _sad_preview_prompt(context: str, *, repair: bool) -> str:
     repair_instruction = (
         "Your previous SAD preview failed validation. Return corrected JSON only. "
@@ -519,5 +593,24 @@ def _sad_preview_prompt(context: str, *, repair: bool) -> str:
         "Use source references only when the provided context includes source IDs. "
         "Do not include Drive links or claim files were saved.\n\n"
         "Current project context:\n"
+        f"{context}"
+    )
+
+
+def _sad_review_prompt(context: str) -> str:
+    return (
+        "You are SADify's internal SAD reviewer. Review the temporary SAD draft "
+        "before it is treated as ready for user approval. Return JSON only.\n\n"
+        "Choose exactly one verdict:\n"
+        "- proceed: the draft is good enough for approval.\n"
+        "- tighten: the draft can proceed but should surface advisory issues.\n"
+        "- regenerate: the draft has fixable quality problems and should be "
+        "regenerated before proceeding.\n"
+        "- ask: the draft depends on a human clarification before proceeding.\n\n"
+        "Flag missing sections, vague functional requirements, unsupported or "
+        "weakly grounded claims, missing assumptions, and open questions. This is "
+        "an advisory self-audit; do not perform sentence-level traceability. Keep "
+        "issue messages concise and business-readable.\n\n"
+        "SAD draft context:\n"
         f"{context}"
     )

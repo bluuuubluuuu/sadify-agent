@@ -306,6 +306,17 @@ class SadPreviewResponse(ApiModel):
     change_tracking: SadPreviewChangeTracking
 
 
+class SadReviewIssue(ApiModel):
+    severity: Literal["low", "medium", "high"]
+    category: str = Field(min_length=1)
+    message: str = Field(min_length=1)
+
+
+class SadReviewResponse(ApiModel):
+    verdict: Literal["proceed", "tighten", "regenerate", "ask"]
+    issues: list[SadReviewIssue] = Field(default_factory=list)
+
+
 class SadPreviewRequest(ApiModel):
     requirement_text: str = Field(min_length=5)
     analysis_id: str | None = None

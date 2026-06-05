@@ -8,6 +8,7 @@ from sadify_api.services.analysis_state import RequirementAnalysisRepository
 from sadify_api.services.gemini_structured import (
     RequirementAnalysisModel,
     SadPreviewModel,
+    SadReviewModel,
 )
 from sadify_api.services.model_catalog import resolve_gemini_model
 from sadify_api.services.sad_preview import SadPreviewRepository
@@ -20,6 +21,7 @@ def create_agent_router(
     analysis_repository: RequirementAnalysisRepository,
     sad_preview_model: SadPreviewModel,
     sad_preview_repository: SadPreviewRepository,
+    sad_review_model: SadReviewModel | None = None,
 ) -> APIRouter:
     router = APIRouter(prefix="/agent", tags=["agent"])
 
@@ -33,6 +35,7 @@ def create_agent_router(
                     sad_preview_repository=sad_preview_repository,
                     analysis_model=analysis_model,
                     sad_preview_model=sad_preview_model,
+                    sad_review_model=sad_review_model,
                     selected_model=resolved_model,
                 ),
                 analysis_session_id=request.analysis_session_id,

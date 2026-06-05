@@ -2,7 +2,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-from google.adk.tools import FunctionTool
+from google.adk.tools import BaseTool, FunctionTool
 
 from sadify_api.schemas import RequirementAnalysisRequest, SadPreviewRequest
 from sadify_api.services.analysis_flow import run_analysis_turn
@@ -10,6 +10,8 @@ from sadify_api.services.analysis_state import RequirementAnalysisRepository
 from sadify_api.services.gemini_structured import (
     RequirementAnalysisModel,
     SadPreviewModel,
+    SadReviewModel,
+    parse_sad_review,
 )
 from sadify_api.services.sad_flow import SadPreviewBlockedError, run_sad_preview
 from sadify_api.services.sad_preview import SadPreviewRepository
@@ -24,7 +26,9 @@ class AgentDeps:
     sad_preview_repository: SadPreviewRepository
     analysis_model: RequirementAnalysisModel
     sad_preview_model: SadPreviewModel
+    sad_review_model: SadReviewModel | None = None
     selected_model: str | None = None
+    max_sad_generations: int | None = None
 
 
 @dataclass(frozen=True)
@@ -32,18 +36,23 @@ class AgentToolFunctions:
     get_readiness: Callable[[str], ToolPayload]
     ask_clarification: Callable[[str], ToolPayload]
     generate_sad: Callable[[str], ToolPayload]
+    review_sad: Callable[[str], ToolPayload]
 
 
-def build_agent_tools(deps: AgentDeps) -> list[FunctionTool]:
+def build_agent_tools(deps: AgentDeps) -> list[BaseTool]:
     tool_functions = build_agent_tool_functions(deps)
     return [
         FunctionTool(tool_functions.get_readiness),
         FunctionTool(tool_functions.ask_clarification),
         FunctionTool(tool_functions.generate_sad),
+        FunctionTool(tool_functions.review_sad),
     ]
 
 
 def build_agent_tool_functions(deps: AgentDeps) -> AgentToolFunctions:
+    generation_count = 0
+    last_generation_payload: ToolPayload | None = None
+
     def get_readiness(analysis_id: str) -> ToolPayload:
         """Return draft readiness for a saved analysis before deciding next action."""
         record = deps.analysis_repository.get_analysis(analysis_id)
@@ -115,6 +124,23 @@ def build_agent_tool_functions(deps: AgentDeps) -> AgentToolFunctions:
 
     def generate_sad(analysis_id: str) -> ToolPayload:
         """Generate a SAD preview from a saved analysis when readiness is sufficient."""
+        nonlocal generation_count, last_generation_payload
+        if (
+            deps.max_sad_generations is not None
+            and generation_count >= deps.max_sad_generations
+        ):
+            payload = dict(
+                last_generation_payload
+                or {
+                    "preview_id": "",
+                    "sections": [],
+                    "assumptions": [],
+                    "open_questions": [],
+                }
+            )
+            payload["regenerate_cap_reached"] = True
+            return payload
+
         record = deps.analysis_repository.get_analysis(analysis_id)
         if record is None:
             return {
@@ -138,6 +164,7 @@ def build_agent_tool_functions(deps: AgentDeps) -> AgentToolFunctions:
                 repository=deps.sad_preview_repository,
             )
         except SadPreviewBlockedError as exc:
+            generation_count += 1
             return {
                 "preview_id": "",
                 "sections": [],
@@ -153,17 +180,58 @@ def build_agent_tool_functions(deps: AgentDeps) -> AgentToolFunctions:
             }
 
         preview = preview_record.preview
-        return {
+        payload = {
             "preview_id": preview_record.preview_id,
             "sections": [section.model_dump() for section in preview.sections],
             "assumptions": list(preview.assumptions),
             "open_questions": list(preview.open_questions),
         }
+        generation_count += 1
+        last_generation_payload = payload
+        return payload
+
+    def review_sad(preview_id: str) -> ToolPayload:
+        """Review a saved SAD preview and return an advisory quality verdict."""
+        record = deps.sad_preview_repository.get_preview(preview_id)
+        if record is None:
+            return {
+                "preview_id": preview_id,
+                "verdict": "ask",
+                "issues": [
+                    {
+                        "severity": "high",
+                        "category": "preview",
+                        "message": "Generate a SAD preview before reviewing it.",
+                    }
+                ],
+            }
+        if deps.sad_review_model is None:
+            return {"preview_id": preview_id, "verdict": "proceed", "issues": []}
+
+        review = parse_sad_review(
+            deps.sad_review_model.review_sad(
+                _review_sad_context(record),
+                model=deps.selected_model,
+            )
+        )
+        payload = {
+            "preview_id": preview_id,
+            "verdict": review.verdict,
+            "issues": [issue.model_dump() for issue in review.issues],
+        }
+        if (
+            payload["verdict"] == "regenerate"
+            and deps.max_sad_generations is not None
+            and generation_count >= deps.max_sad_generations
+        ):
+            payload["regenerate_cap_reached"] = True
+        return payload
 
     return AgentToolFunctions(
         get_readiness=get_readiness,
         ask_clarification=ask_clarification,
         generate_sad=generate_sad,
+        review_sad=review_sad,
     )
 
 
@@ -187,3 +255,13 @@ def _readiness_gaps(analysis) -> list[dict[str, str]]:
         for category in analysis.categories
         if category.status != "complete"
     ]
+
+
+def _review_sad_context(record) -> str:
+    return (
+        "Requirement text:\n"
+        f"{record.requirement_text}\n\n"
+        f"Analysis ID: {record.analysis_id or ''}\n\n"
+        "SAD preview JSON:\n"
+        f"{record.preview.model_dump_json()}"
+    )

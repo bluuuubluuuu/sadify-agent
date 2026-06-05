@@ -104,6 +104,7 @@ def test_build_finalize_agent_uses_adk_agent_with_task_tools():
         "get_readiness",
         "ask_clarification",
         "generate_sad",
+        "review_sad",
     ]
     assert "clarify first" in agent.instruction.lower()
 
@@ -138,6 +139,184 @@ def test_run_finalize_ready_generates_sad_and_completes():
     assert result["result"]["preview_id"] == "SP-000001"
     assert result["result"]["open_questions"] == VALID_PREVIEW["open_questions"]
     assert [repair for _context, repair in preview_model.requests] == [False]
+
+
+def test_run_finalize_reviews_weak_draft_regenerates_once_then_completes():
+    deps, analysis_repository, _preview_repository, _analysis_model, preview_model = (
+        _finalize_deps(
+            preview_outputs=[_preview_payload(), _preview_payload()],
+            review_outputs=[
+                {
+                    "verdict": "regenerate",
+                    "issues": [
+                        {
+                            "severity": "high",
+                            "category": "workflow",
+                            "message": "Workflow section is too vague.",
+                        }
+                    ],
+                },
+                {"verdict": "proceed", "issues": []},
+            ],
+        )
+    )
+    record = _save_ready_analysis(analysis_repository)
+    model = ScriptedLlm(
+        responses=[
+            _function_call("get_readiness", {"analysis_id": record.analysis_id}),
+            _function_call("generate_sad", {"analysis_id": record.analysis_id}),
+            _function_call("review_sad", {"preview_id": "SP-000001"}),
+            _function_call("generate_sad", {"analysis_id": record.analysis_id}),
+            _function_call("review_sad", {"preview_id": "SP-000002"}),
+            types.Content(
+                role="model",
+                parts=[types.Part.from_text(text="Reviewed draft generated.")],
+            ),
+        ]
+    )
+
+    result = run_finalize(
+        deps,
+        analysis_session_id="session-001",
+        model=model,
+    )
+
+    assert result["status"] == "completed"
+    assert [event["tool"] for event in result["events"] if event["type"] == "tool"] == [
+        "get_readiness",
+        "generate_sad",
+        "review_sad",
+        "generate_sad",
+        "review_sad",
+    ]
+    assert result["result"]["preview_id"] == "SP-000002"
+    assert result["result"]["review"]["verdict"] == "proceed"
+    assert [repair for _context, repair in preview_model.requests] == [False, False]
+
+
+def test_run_finalize_honors_regenerate_cap_and_surfaces_remaining_issues():
+    deps, analysis_repository, _preview_repository, _analysis_model, preview_model = (
+        _finalize_deps(
+            preview_outputs=[_preview_payload(), _preview_payload(), _preview_payload()],
+            review_outputs=[
+                {
+                    "verdict": "regenerate",
+                    "issues": [
+                        {
+                            "severity": "medium",
+                            "category": "reports",
+                            "message": "Reporting details are weak.",
+                        }
+                    ],
+                },
+                {
+                    "verdict": "regenerate",
+                    "issues": [
+                        {
+                            "severity": "medium",
+                            "category": "permissions",
+                            "message": "Permissions are still vague.",
+                        }
+                    ],
+                },
+                {
+                    "verdict": "regenerate",
+                    "issues": [
+                        {
+                            "severity": "high",
+                            "category": "workflow",
+                            "message": "Workflow still needs tightening.",
+                        }
+                    ],
+                },
+            ],
+        )
+    )
+    record = _save_ready_analysis(analysis_repository)
+    model = ScriptedLlm(
+        responses=[
+            _function_call("get_readiness", {"analysis_id": record.analysis_id}),
+            _function_call("generate_sad", {"analysis_id": record.analysis_id}),
+            _function_call("review_sad", {"preview_id": "SP-000001"}),
+            _function_call("generate_sad", {"analysis_id": record.analysis_id}),
+            _function_call("review_sad", {"preview_id": "SP-000002"}),
+            _function_call("generate_sad", {"analysis_id": record.analysis_id}),
+            _function_call("review_sad", {"preview_id": "SP-000003"}),
+            _function_call("generate_sad", {"analysis_id": record.analysis_id}),
+            types.Content(
+                role="model",
+                parts=[types.Part.from_text(text="Proceed with best capped draft.")],
+            ),
+        ]
+    )
+
+    result = run_finalize(
+        deps,
+        analysis_session_id="session-001",
+        model=model,
+    )
+
+    assert result["status"] == "completed"
+    assert [event["tool"] for event in result["events"] if event["type"] == "tool"] == [
+        "get_readiness",
+        "generate_sad",
+        "review_sad",
+        "generate_sad",
+        "review_sad",
+        "generate_sad",
+        "review_sad",
+        "generate_sad",
+    ]
+    assert result["result"]["preview_id"] == "SP-000003"
+    assert result["result"]["review"]["regenerate_cap_reached"] is True
+    assert "Review remaining issue: Workflow still needs tightening." in result[
+        "result"
+    ]["open_questions"]
+    assert len(preview_model.requests) == 3
+
+
+def test_run_finalize_review_ask_verdict_returns_asked_clarification():
+    deps, analysis_repository, _preview_repository, _analysis_model, _preview_model = (
+        _finalize_deps(
+            preview_outputs=[_preview_payload()],
+            review_outputs=[
+                {
+                    "verdict": "ask",
+                    "issues": [
+                        {
+                            "severity": "high",
+                            "category": "scope",
+                            "message": "The scope needs a human answer before finalizing.",
+                        }
+                    ],
+                }
+            ],
+        )
+    )
+    record = _save_ready_analysis(analysis_repository)
+    model = ScriptedLlm(
+        responses=[
+            _function_call("get_readiness", {"analysis_id": record.analysis_id}),
+            _function_call("generate_sad", {"analysis_id": record.analysis_id}),
+            _function_call("review_sad", {"preview_id": "SP-000001"}),
+            types.Content(
+                role="model",
+                parts=[types.Part.from_text(text="Need clarification.")],
+            ),
+        ]
+    )
+
+    result = run_finalize(
+        deps,
+        analysis_session_id="session-001",
+        model=model,
+    )
+
+    assert result["status"] == "asked_clarification"
+    assert result["result"]["verdict"] == "ask"
+    assert result["result"]["issues"][0]["message"] == (
+        "The scope needs a human answer before finalizing."
+    )
 
 
 def test_run_finalize_not_ready_asks_one_clarification_and_stops():
@@ -249,6 +428,7 @@ def _finalize_deps(
     *,
     analysis_outputs: list[dict[str, object]] | None = None,
     preview_outputs: list[dict[str, object]] | None = None,
+    review_outputs: list[dict[str, object]] | None = None,
 ):
     analysis_repository = RequirementAnalysisRepository()
     preview_repository = SadPreviewRepository()
@@ -256,12 +436,14 @@ def _finalize_deps(
         analysis_outputs or [_analysis_payload()]
     )
     preview_model = FakeSadPreviewModel(preview_outputs or [_preview_payload()])
+    review_model = FakeSadReviewModel(review_outputs or [_review_payload()])
     return (
         AgentDeps(
             analysis_repository=analysis_repository,
             sad_preview_repository=preview_repository,
             analysis_model=analysis_model,
             sad_preview_model=preview_model,
+            sad_review_model=review_model,
         ),
         analysis_repository,
         preview_repository,
@@ -305,3 +487,17 @@ def _analysis_payload() -> dict[str, object]:
 
 def _preview_payload() -> dict[str, object]:
     return json.loads(json.dumps(VALID_PREVIEW))
+
+
+def _review_payload() -> dict[str, object]:
+    return {"verdict": "proceed", "issues": []}
+
+
+class FakeSadReviewModel:
+    def __init__(self, outputs: list[dict[str, object]]) -> None:
+        self.outputs = list(outputs)
+        self.requests: list[tuple[str, str | None]] = []
+
+    def review_sad(self, context: str, *, model: str | None = None) -> str:
+        self.requests.append((context, model))
+        return json.dumps(self.outputs.pop(0))
