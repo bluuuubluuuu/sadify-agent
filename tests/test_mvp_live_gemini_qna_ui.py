@@ -63,7 +63,7 @@ def test_qna_choices_and_chat_render_question_flow():
     assert "Choose one." in chips
     assert "is_disabled" in chips
     assert "why_this_matters" in chat
-    assert "Generate SAD preview" in chat
+    assert "Quick draft" in chat
     assert "All required areas confirmed" in chat
     assert "What I understand so far" in readiness
     # D-wording (D-093): badge reads as evidence-grounding, not "confidence",

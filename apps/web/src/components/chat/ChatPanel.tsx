@@ -149,7 +149,7 @@ export function ChatPanel({
               }
               onClick={onGenerate}
             >
-              Generate SAD preview
+              Quick draft
             </Button>
           </div>
         )}

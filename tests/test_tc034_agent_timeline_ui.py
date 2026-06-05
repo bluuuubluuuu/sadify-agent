@@ -72,7 +72,8 @@ def test_chat_footer_makes_agent_the_hero_action():
 
     assert "onFinalizeWithAgent?: () => void" in chat
     assert "Finalize with agent" in chat
-    assert "Generate SAD preview" in chat
+    assert "Quick draft" in chat
+    assert "Generate SAD preview" not in chat
     # Agent is the single primary CTA; manual generate is demoted to secondary.
     assert 'variant={onFinalizeWithAgent ? "secondary" : "primary"}' in chat
     assert ".readyActions" in css
@@ -92,5 +93,5 @@ def test_workspace_wires_agent_finalize_overlay():
     assert "onContinueInChat={agent.close}" in workspace
     # Additive: the manual save flow is untouched.
     assert "onSave={() => sadSave.save()}" in workspace
-    assert "onFinalizeWithAgent?: () => void" in preview
-    assert "Finalize with agent" in preview
+    assert "onFinalizeWithAgent?: () => void" not in preview
+    assert "Finalize with agent" not in preview

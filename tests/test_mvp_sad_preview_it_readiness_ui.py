@@ -27,7 +27,7 @@ def test_sad_preview_ui_wires_backend_preview_and_user_friendly_sections():
     assert "generateSadPreview" in api
     assert "/sad/preview" in api
     assert "generateSadPreview" in save
-    assert "Generate SAD preview" in chat
+    assert "Quick draft" in chat
     assert "Draft-ready" in pane
     assert "Temporary — not saved yet" in pane
     assert "Assumptions we made" in pane

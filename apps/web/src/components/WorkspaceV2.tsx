@@ -192,7 +192,6 @@ export function WorkspaceV2() {
         onSave={() => sadSave.save()}
         onUpdateWiki={() => sadSave.updateWiki()}
         onRefine={() => sadSave.dismissPreview()}
-        onFinalizeWithAgent={() => agent.finalize()}
       />
     ) : stage === "clarify" && qna.analysis ? (
       <ReadinessPane
