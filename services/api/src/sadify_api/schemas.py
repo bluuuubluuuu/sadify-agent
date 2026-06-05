@@ -43,6 +43,24 @@ class AuthSessionResponse(ApiModel):
     user: AuthenticatedUser
 
 
+class AgentFinalizeRequest(ApiModel):
+    analysis_session_id: str = Field(min_length=1)
+    model: str | None = None
+
+
+class AgentEvent(ApiModel):
+    type: Literal["tool", "message"]
+    tool: str | None = None
+    summary: str = Field(min_length=1)
+    reasoning: str | None = None
+
+
+class AgentFinalizeResponse(ApiModel):
+    status: Literal["asked_clarification", "awaiting_approval", "completed"]
+    events: list[AgentEvent] = Field(default_factory=list)
+    result: dict[str, Any] | None = None
+
+
 class GuestDraftCreateRequest(ApiModel):
     guest_session_id: str
     requirement_text: str | None = None

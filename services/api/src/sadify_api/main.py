@@ -2,6 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from sadify_api.config import ApiConfig, load_api_config
+from sadify_api.routes.agent import create_agent_router
 from sadify_api.routes.analysis import create_analysis_router
 from sadify_api.routes.auth import create_auth_router
 from sadify_api.routes.diagnostics import create_diagnostics_router
@@ -96,6 +97,15 @@ def create_app(
     )
     app.include_router(create_health_router(config))
     app.include_router(create_models_router(config))
+    app.include_router(
+        create_agent_router(
+            config=config,
+            analysis_model=analysis_model,
+            analysis_repository=analysis_repository,
+            sad_preview_model=sad_preview_model,
+            sad_preview_repository=sad_preview_repository,
+        )
+    )
     app.include_router(create_auth_router(token_verifier))
     app.include_router(create_drafts_router(draft_repository, token_verifier))
     app.include_router(create_analysis_router(analysis_model, analysis_repository))
