@@ -88,6 +88,7 @@ export function WorkspaceV2() {
   const agent = useAgentFinalize({
     analysisSessionId,
     selectedModel: models.isLoaded ? models.selectedModel : undefined,
+    onSaved: () => setHistoryRefreshKey((key) => key + 1),
   });
 
   // Preserve WorkspaceShell: fetch Drive status when a user is present.

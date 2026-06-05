@@ -60,6 +60,11 @@ def test_agent_timeline_renders_reasoning_and_approval():
     assert "Continue in chat" in timeline
     assert "onContinueInChat" in timeline
     assert "result.missing_basics" in timeline
+    # Approval + completed states distinguish Drive save vs wiki update clearly.
+    assert "ACTION_META" in timeline
+    assert "SAD document saved to repo" in timeline
+    assert "Project wiki updated" in timeline
+    assert "Open in Drive" in timeline
 
 
 def test_chat_footer_makes_agent_the_hero_action():
@@ -91,6 +96,8 @@ def test_workspace_wires_agent_finalize_overlay():
     assert "<AgentTimeline" in workspace
     assert "onApprove={() => agent.approve()}" in workspace
     assert "onContinueInChat={agent.close}" in workspace
+    # Agent save refreshes save history like the manual save does.
+    assert "onSaved: () => setHistoryRefreshKey" in workspace
     # Additive: the manual save flow is untouched.
     assert "onSave={() => sadSave.save()}" in workspace
     assert "onFinalizeWithAgent?: () => void" not in preview

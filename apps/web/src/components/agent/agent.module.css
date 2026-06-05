@@ -122,11 +122,63 @@
   font-size: var(--fs-sec);
   font-weight: var(--fw-bold);
 }
+.savedNote {
+  margin: 0 0 10px;
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--c-success);
+  font-weight: var(--fw-bold);
+}
 .actions {
+  list-style: none;
   margin: 0 0 12px;
-  padding-left: 18px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.actionItem {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+.actionText {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.actionText strong {
   font-size: var(--fs-sec);
+  font-weight: var(--fw-bold);
+  color: var(--c-fg);
+}
+.actionText small {
+  font-size: 12px;
   color: var(--c-subtle);
+}
+.actionText a {
+  font-size: 12px;
+  color: var(--c-primary);
+  font-weight: var(--fw-bold);
+  width: fit-content;
+}
+.doneBlock {
+  margin-top: 16px;
+  padding: 14px;
+  border-radius: var(--r-md);
+  border: 1px solid var(--c-success-border, var(--c-border));
+  background: var(--c-success-bg, transparent);
+}
+.doneTitle {
+  margin: 0 0 10px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--fs-sec);
+  font-weight: var(--fw-bold);
+  color: var(--c-success);
 }
 .bar {
   display: flex;

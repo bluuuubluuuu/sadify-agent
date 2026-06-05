@@ -16,6 +16,7 @@ type AgentResult = {
   proposed_actions?: AgentProposedAction[];
   question?: string;
   actions?: Array<Record<string, unknown>>;
+  completed_actions?: Array<Record<string, unknown>>;
   [key: string]: unknown;
 };
 
@@ -29,9 +30,11 @@ type AgentResult = {
 export function useAgentFinalize({
   analysisSessionId,
   selectedModel,
+  onSaved,
 }: {
   analysisSessionId: string;
   selectedModel?: string;
+  onSaved?: () => void;
 }) {
   const [isOpen, setIsOpen] = useState(false);
   const [events, setEvents] = useState<AgentEvent[]>([]);
@@ -88,6 +91,14 @@ export function useAgentFinalize({
       setEvents((previous) => [...previous, ...response.events]);
       setStatus(response.status);
       setResult((response.result ?? null) as AgentResult | null);
+      // Refresh save history whenever a write landed — a wiki conflict returns
+      // awaiting_approval but the SAD save already succeeded.
+      const wroteSomething =
+        response.status === "completed" ||
+        Boolean((response.result as AgentResult | null)?.completed_actions);
+      if (wroteSomething) {
+        onSaved?.();
+      }
     } catch (caught) {
       setError(
         caught instanceof Error ? caught.message : "The approved save failed.",

@@ -14,6 +14,29 @@ const TOOL_ICON: Record<string, IconName> = {
   update_wiki: "book",
 };
 
+const ACTION_META: Record<string, { icon: IconName; what: string }> = {
+  save_to_drive: {
+    icon: "fileText",
+    what: "The SAD document → saved into your project repo folder in Drive",
+  },
+  update_wiki: {
+    icon: "book",
+    what: "Structured knowledge notes → written to the project wiki folder",
+  },
+  overwrite_wiki: {
+    icon: "book",
+    what: "Overwrite the changed wiki files in the project wiki folder",
+  },
+};
+
+type CompletedAction = {
+  tool?: string;
+  status?: string;
+  doc_path?: string;
+  doc_url?: string;
+  file_count?: number;
+};
+
 type AgentResult = {
   approval_id?: string;
   preview_id?: string;
@@ -22,6 +45,7 @@ type AgentResult = {
   why?: string;
   missing_basics?: string[];
   actions?: Array<Record<string, unknown>>;
+  completed_actions?: Array<Record<string, unknown>>;
 };
 
 export function AgentTimeline({
@@ -93,14 +117,36 @@ export function AgentTimeline({
 
         {status === "awaiting_approval" && result?.approval_id ? (
           <div className={styles.approval}>
+            {result.completed_actions && result.completed_actions.length ? (
+              <p className={styles.savedNote}>
+                <Icon name="checkCircle" size={14} color="var(--c-success)" />
+                SAD document already saved to your repo — the wiki has changed
+                files, confirm overwrite to update it, or skip with “Not now”.
+              </p>
+            ) : null}
             <p className={styles.approvalTitle}>
               <Icon name="info" size={14} color="var(--c-secondary)" />
-              The draft is ready — approve to save
+              {result.completed_actions && result.completed_actions.length
+                ? "Update the project wiki?"
+                : "The draft is ready — approve to save"}
             </p>
             <ul className={styles.actions}>
-              {(result.proposed_actions ?? []).map((action) => (
-                <li key={action.id}>{action.label}</li>
-              ))}
+              {(result.proposed_actions ?? []).map((action) => {
+                const meta = ACTION_META[action.id];
+                return (
+                  <li key={action.id} className={styles.actionItem}>
+                    <Icon
+                      name={meta?.icon ?? "uploadCloud"}
+                      size={16}
+                      color="var(--c-secondary)"
+                    />
+                    <span className={styles.actionText}>
+                      <strong>{action.label}</strong>
+                      {meta ? <small>{meta.what}</small> : null}
+                    </span>
+                  </li>
+                );
+              })}
             </ul>
             <div className={styles.bar}>
               <Button
@@ -153,9 +199,44 @@ export function AgentTimeline({
         ) : null}
 
         {status === "completed" ? (
-          <div className={styles.done}>
-            <Icon name="checkCircle" size={18} color="var(--c-success)" />
-            <span>Saved. The approved actions ran successfully.</span>
+          <div className={styles.doneBlock}>
+            <p className={styles.doneTitle}>
+              <Icon name="checkCircle" size={18} color="var(--c-success)" />
+              Saved to your Drive
+            </p>
+            <ul className={styles.actions}>
+              {((result?.actions ?? []) as CompletedAction[]).map((action, index) => {
+                const tool = String(action.tool ?? "");
+                if (tool === "save_to_drive") {
+                  return (
+                    <li key={index} className={styles.actionItem}>
+                      <Icon name="fileText" size={16} color="var(--c-success)" />
+                      <span className={styles.actionText}>
+                        <strong>SAD document saved to repo</strong>
+                        {action.doc_path ? <small>{action.doc_path}</small> : null}
+                        {action.doc_url ? (
+                          <a href={action.doc_url} target="_blank" rel="noreferrer">
+                            Open in Drive
+                          </a>
+                        ) : null}
+                      </span>
+                    </li>
+                  );
+                }
+                return (
+                  <li key={index} className={styles.actionItem}>
+                    <Icon name="book" size={16} color="var(--c-success)" />
+                    <span className={styles.actionText}>
+                      <strong>Project wiki updated</strong>
+                      <small>
+                        {action.file_count ?? 0} file
+                        {action.file_count === 1 ? "" : "s"} written to the wiki folder
+                      </small>
+                    </span>
+                  </li>
+                );
+              })}
+            </ul>
           </div>
         ) : null}
       </div>
