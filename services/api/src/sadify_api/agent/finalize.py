@@ -372,12 +372,15 @@ def _finalize_message(
         "Finalize the SADify analysis session by choosing the right tools.\n"
         f"analysis_session_id: {analysis_session_id}\n"
         f"latest_analysis_id: {latest_analysis_id}\n"
-        "First inspect readiness when an analysis id is available. "
-        "If it is not ready enough, call ask_clarification once and stop. "
-        "If it is ready enough, call generate_sad, then call review_sad on the "
-        "preview. If review_sad says regenerate, you may call generate_sad again "
-        "and review the new draft. If it says ask, stop and return that need for "
-        "clarification. If it says proceed or tighten, stop with the best draft. "
+        "The existing Q&A answers are the source of truth. Trust them and do "
+        "NOT re-ask anything the user already answered. "
+        "First inspect readiness when an analysis id is available, then call "
+        "generate_sad. If generate_sad reports it is blocked by a missing "
+        "basic, stop and return that one clarification. Otherwise a draft "
+        "exists: call review_sad on it. If review_sad says regenerate, you may "
+        "call generate_sad again and review the new draft. If it says proceed, "
+        "tighten, or ask, stop with the best draft — minor gaps belong in the "
+        "draft's open questions, not in a new question to the user. "
         "The backend will request explicit approval after a ready draft. Do not "
         "write to Drive, wiki, or GitHub without approval."
     )
@@ -396,11 +399,6 @@ def _finalize_message(
 def _final_status(
     tool_results: list[tuple[str, dict[str, Any]]],
 ) -> tuple[FinalizeStatus, dict[str, Any] | None]:
-    for tool_name, response in reversed(tool_results):
-        if tool_name == "ask_clarification":
-            return "asked_clarification", response
-        if tool_name == "review_sad" and response.get("verdict") == "ask":
-            return "asked_clarification", response
     write_actions = [
         {"tool": tool_name, **response}
         for tool_name, response in tool_results
@@ -408,19 +406,38 @@ def _final_status(
     ]
     if write_actions:
         return "completed", {"actions": write_actions}
+
     latest_review = _latest_tool_result(tool_results, "review_sad")
     latest_preview = _latest_tool_result(tool_results, "generate_sad")
-    if latest_preview is not None:
-        result = dict(latest_preview)
-        if latest_review is not None:
-            result["review"] = latest_review
-            if latest_review.get("regenerate_cap_reached"):
-                result["open_questions"] = _open_questions_with_review_issues(
-                    result.get("open_questions", []),
-                    latest_review,
-                )
-        return "completed", result
-    return "awaiting_approval", None
+    has_draft = latest_preview is not None and bool(latest_preview.get("preview_id"))
+
+    # Collaborative model (Option A): the agent trusts the completed Q&A and
+    # finalizes whenever it could produce a draft. A draft wins over a stray
+    # ask_clarification, and a "tighten"/"ask" self-review folds its gaps into
+    # the SAD's open questions instead of re-interrogating the user. The ONLY
+    # genuine block is when no draft exists (generate_sad was blocked by a
+    # missing basic, or the agent only asked without drafting).
+    if not has_draft:
+        for tool_name, response in reversed(tool_results):
+            if tool_name == "ask_clarification":
+                return "asked_clarification", response
+            if tool_name == "review_sad" and response.get("verdict") == "ask":
+                return "asked_clarification", response
+        if latest_preview is not None:
+            # generate_sad ran but was blocked (missing basics, no preview_id).
+            return "asked_clarification", latest_preview
+        return "awaiting_approval", None
+
+    result = dict(latest_preview)
+    if latest_review is not None:
+        result["review"] = latest_review
+        verdict = latest_review.get("verdict")
+        if latest_review.get("regenerate_cap_reached") or verdict in ("tighten", "ask"):
+            result["open_questions"] = _open_questions_with_review_issues(
+                result.get("open_questions", []),
+                latest_review,
+            )
+    return "completed", result
 
 
 def _approval_result(

@@ -299,7 +299,10 @@ def test_run_finalize_honors_regenerate_cap_and_surfaces_remaining_issues():
     assert len(preview_model.requests) == 3
 
 
-def test_run_finalize_review_ask_verdict_returns_asked_clarification():
+def test_run_finalize_review_ask_with_draft_folds_gaps_and_awaits_approval():
+    # Option A: when a draft exists, a review verdict of "ask" is treated like
+    # "tighten" — its gaps become open questions and the flow proceeds to
+    # approval instead of re-interrogating the user.
     deps, analysis_repository, _preview_repository, _analysis_model, _preview_model = (
         _finalize_deps(
             preview_outputs=[_preview_payload()],
@@ -325,7 +328,7 @@ def test_run_finalize_review_ask_verdict_returns_asked_clarification():
             _function_call("review_sad", {"preview_id": "SP-000001"}),
             types.Content(
                 role="model",
-                parts=[types.Part.from_text(text="Need clarification.")],
+                parts=[types.Part.from_text(text="Proceeding with the best draft.")],
             ),
         ]
     )
@@ -336,11 +339,64 @@ def test_run_finalize_review_ask_verdict_returns_asked_clarification():
         model=model,
     )
 
-    assert result["status"] == "asked_clarification"
-    assert result["result"]["verdict"] == "ask"
-    assert result["result"]["issues"][0]["message"] == (
-        "The scope needs a human answer before finalizing."
+    assert result["status"] == "awaiting_approval"
+    assert result["result"]["preview_id"] == "SP-000001"
+    assert result["result"]["approval_id"].startswith("AP-")
+    assert (
+        "Review remaining issue: The scope needs a human answer before finalizing."
+        in result["result"]["open_questions"]
     )
+
+
+def test_run_finalize_draft_with_stray_clarification_still_awaits_approval():
+    # The agent freelanced an ask_clarification after producing a reviewed
+    # draft; the draft must win (no dead-end re-ask).
+    deps, analysis_repository, _preview_repository, _analysis_model, _preview_model = (
+        _finalize_deps(
+            preview_outputs=[_preview_payload()],
+            analysis_outputs=[_analysis_payload()],
+            review_outputs=[
+                {
+                    "verdict": "tighten",
+                    "issues": [
+                        {
+                            "severity": "low",
+                            "category": "users_roles",
+                            "message": "Confirm the primary users.",
+                        }
+                    ],
+                }
+            ],
+        )
+    )
+    record = _save_ready_analysis(analysis_repository)
+    model = ScriptedLlm(
+        responses=[
+            _function_call("get_readiness", {"analysis_id": record.analysis_id}),
+            _function_call("generate_sad", {"analysis_id": record.analysis_id}),
+            _function_call("review_sad", {"preview_id": "SP-000001"}),
+            _function_call(
+                "ask_clarification", {"analysis_session_id": "session-001"}
+            ),
+            types.Content(
+                role="model",
+                parts=[types.Part.from_text(text="Asking just in case.")],
+            ),
+        ]
+    )
+
+    result = run_finalize(
+        deps,
+        analysis_session_id="session-001",
+        model=model,
+    )
+
+    assert result["status"] == "awaiting_approval"
+    assert result["result"]["preview_id"] == "SP-000001"
+    assert [action["id"] for action in result["result"]["proposed_actions"]] == [
+        "save_to_drive",
+        "update_wiki",
+    ]
 
 
 def test_run_finalize_unapproved_write_returns_approval_request_without_writes():
