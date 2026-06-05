@@ -749,6 +749,53 @@ def test_run_approved_actions_wiki_conflict_consumes_original_and_reapproves():
     assert approval_store.get("session-001", result["result"]["approval_id"]) is not None
 
 
+def test_run_approved_actions_wiki_conflict_surfaces_completed_save():
+    # save_to_drive succeeds, then the wiki conflicts. The completed save must
+    # be surfaced so the UI can refresh history and tell the user it was saved.
+    def fake_save_runner(**kwargs):
+        return FakeSaveRecord(save_id="SV-DONE", preview_id=kwargs["request"].preview_id)
+
+    def fake_wiki_context_builder(_deps):
+        return object()
+
+    def fake_wiki_update_runner(**kwargs):
+        raise WikiFlowError(
+            409,
+            "WIKI_CONFLICT",
+            "Confirm overwrite.",
+            changed_files=["workflows.md"],
+        )
+
+    approval_store = ApprovalStore()
+    approval_id = approval_store.create(
+        "session-001",
+        [
+            {"id": "save_to_drive", "label": "Save SAD to Google Drive", "preview_id": "SP-000001"},
+            {"id": "update_wiki", "label": "Update project wiki", "preview_id": "SP-000001"},
+        ],
+    )
+    deps, analysis_repository, _preview_repository, _analysis_model, _preview_model = (
+        _finalize_deps(
+            sad_save_runner=fake_save_runner,
+            wiki_context_builder=fake_wiki_context_builder,
+            wiki_update_runner=fake_wiki_update_runner,
+        )
+    )
+    _save_ready_analysis(analysis_repository)
+
+    result = run_approved_actions(
+        deps,
+        analysis_session_id="session-001",
+        approval_store=approval_store,
+        approval_id=approval_id,
+    )
+
+    assert result["status"] == "awaiting_approval"
+    completed = result["result"]["completed_actions"]
+    assert [a["tool"] for a in completed] == ["save_to_drive"]
+    assert completed[0]["save_id"] == "SV-DONE"
+
+
 def test_run_finalize_not_ready_asks_one_clarification_and_stops():
     deps, analysis_repository, _preview_repository, analysis_model, _preview_model = (
         _finalize_deps(analysis_outputs=[_analysis_payload()])

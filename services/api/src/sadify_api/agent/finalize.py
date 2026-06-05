@@ -322,6 +322,13 @@ def run_approved_actions(
                 analysis_session_id,
                 exc.proposed_actions,
             )
+            conflict_result = _approval_result(
+                approval_id=new_approval_id,
+                error=exc,
+                tool_results=[],
+            )
+            if results:
+                conflict_result["completed_actions"] = results
             return {
                 "status": "awaiting_approval",
                 "events": [
@@ -331,11 +338,7 @@ def run_approved_actions(
                         "summary": exc.message,
                     }
                 ],
-                "result": _approval_result(
-                    approval_id=new_approval_id,
-                    error=exc,
-                    tool_results=[],
-                ),
+                "result": conflict_result,
             }
 
         if response.get("status") == "error":
