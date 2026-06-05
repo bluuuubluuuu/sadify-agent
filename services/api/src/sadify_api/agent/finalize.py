@@ -99,21 +99,112 @@ def run_finalize(
             ),
         }
 
+    status, result = _terminal_from_tool_results(
+        tool_results,
+        store=store,
+        analysis_session_id=analysis_session_id,
+    )
+    return {
+        "status": status,
+        "events": events,
+        "result": result,
+    }
+
+
+def stream_finalize_events(
+    deps: AgentDeps,
+    *,
+    analysis_session_id: str,
+    model: str | BaseLlm,
+    approval_store: ApprovalStore | None = None,
+):
+    """Yield finalize activity events one at a time, ending in a terminal status.
+
+    Each yielded item is a dict. Activity items use {"type": "tool"|"message",
+    "tool", "summary", "reasoning"}; the final item is
+    {"type": "status", "status", "result"}.
+    """
+    store = approval_store or DEFAULT_APPROVAL_STORE
+    tool_deps = _with_selected_model(replace(deps, write_approval=None), model)
+    agent = build_finalize_agent(tool_deps, model=model)
+    session_service = InMemorySessionService()
+    session_service.create_session_sync(
+        app_name="sadify-api",
+        user_id="sadify-finalizer",
+        session_id=analysis_session_id,
+    )
+    runner = Runner(
+        app_name="sadify-api",
+        agent=agent,
+        session_service=session_service,
+    )
+    tool_results: list[tuple[str, dict[str, Any]]] = []
+    try:
+        for event in runner.run(
+            user_id="sadify-finalizer",
+            session_id=analysis_session_id,
+            new_message=_finalize_message(deps, analysis_session_id, None),
+        ):
+            for function_response in event.get_function_responses():
+                response = dict(function_response.response or {})
+                tool_results.append((function_response.name, response))
+                yield {
+                    "type": "tool",
+                    "tool": function_response.name,
+                    "summary": _tool_summary(function_response.name, response),
+                    "reasoning": _tool_reasoning(function_response.name, response),
+                }
+    except WriteApprovalRequiredError as exc:
+        new_approval_id = store.create(analysis_session_id, exc.proposed_actions)
+        yield {
+            "type": "tool",
+            "tool": exc.tool_name,
+            "summary": exc.message,
+            "reasoning": _approval_reasoning(),
+        }
+        yield {
+            "type": "status",
+            "status": "awaiting_approval",
+            "result": _approval_result(
+                approval_id=new_approval_id,
+                error=exc,
+                tool_results=tool_results,
+            ),
+        }
+        return
+
+    status, result = _terminal_from_tool_results(
+        tool_results,
+        store=store,
+        analysis_session_id=analysis_session_id,
+    )
+    if status == "awaiting_approval":
+        yield {
+            "type": "message",
+            "tool": None,
+            "summary": "Draft is ready — requesting your approval before saving.",
+            "reasoning": _approval_reasoning(),
+        }
+    yield {"type": "status", "status": status, "result": result}
+
+
+def _terminal_from_tool_results(
+    tool_results: list[tuple[str, dict[str, Any]]],
+    *,
+    store: ApprovalStore,
+    analysis_session_id: str,
+) -> tuple[FinalizeStatus, dict[str, Any] | None]:
     approval_required = _latest_approval_required(tool_results)
     if approval_required is not None:
         proposed_actions = approval_required.get("proposed_actions", [])
         if not isinstance(proposed_actions, list):
             proposed_actions = []
         new_approval_id = store.create(analysis_session_id, proposed_actions)
-        return {
-            "status": "awaiting_approval",
-            "events": events,
-            "result": _approval_required_result(
-                approval_id=new_approval_id,
-                response=approval_required,
-                tool_results=tool_results,
-            ),
-        }
+        return "awaiting_approval", _approval_required_result(
+            approval_id=new_approval_id,
+            response=approval_required,
+            tool_results=tool_results,
+        )
 
     status, result = _final_status(tool_results)
     if status == "completed" and _is_ready_preview_result(result):
@@ -126,16 +217,8 @@ def run_finalize(
         approval_result["proposed_actions"] = _save_and_wiki_actions(
             str(result["preview_id"])
         )
-        return {
-            "status": "awaiting_approval",
-            "events": events,
-            "result": approval_result,
-        }
-    return {
-        "status": status,
-        "events": events,
-        "result": result,
-    }
+        return "awaiting_approval", approval_result
+    return status, result
 
 
 def run_approved_actions(
@@ -446,3 +529,55 @@ def _tool_summary(tool_name: str, response: dict[str, Any]) -> str:
             return f"Updated wiki ({response.get('file_count', 0)} files)."
         return str(response.get("message") or "Wiki update did not complete.")
     return f"Ran {tool_name}."
+
+
+def _tool_reasoning(tool_name: str, response: dict[str, Any]) -> str:
+    """Explain WHY the agent took this step, derived from the tool result."""
+    if tool_name == "get_readiness":
+        score = response.get("score")
+        confidence = response.get("confidence")
+        gaps = response.get("gaps")
+        gap_count = len(gaps) if isinstance(gaps, list) else 0
+        head = f"Requirement readiness {score}% with {confidence} confidence"
+        if gap_count:
+            return f"{head}; {gap_count} area(s) still open — judging if that is enough to draft."
+        return f"{head}; the basics are covered — strong enough to draft."
+    if tool_name == "ask_clarification":
+        return (
+            "Not confident enough to draft yet — asking one grounded question "
+            "to close the most important gap instead of guessing."
+        )
+    if tool_name == "generate_sad":
+        if response.get("error") == "sad_preview_blocked":
+            return "Cannot draft yet — basic facts are still missing; flagging them."
+        sections = response.get("sections")
+        section_count = len(sections) if isinstance(sections, list) else 0
+        return f"Requirement is ready — drafted a SAD with {section_count} section(s) from the analysis."
+    if tool_name == "review_sad":
+        verdict = response.get("verdict", "reviewed")
+        issues = response.get("issues", [])
+        issue_count = len(issues) if isinstance(issues, list) else 0
+        if response.get("regenerate_cap_reached"):
+            return (
+                f"Self-review still flags {issue_count} issue(s) but the regeneration "
+                "cap is reached — surfacing them as open questions instead of looping."
+            )
+        if verdict == "proceed":
+            return f"Self-review passed ({issue_count} issue(s)) — this draft is good to finalize."
+        if verdict == "tighten":
+            return f"Self-review found {issue_count} minor gap(s) — keeping this draft but flagging them."
+        if verdict == "regenerate":
+            return f"Self-review found {issue_count} weak/ungrounded point(s) — regenerating a stronger draft."
+        if verdict == "ask":
+            return f"Self-review says the draft needs a human answer ({issue_count} issue(s)) — asking instead of finalizing."
+        return f"Reviewed the draft: {verdict}."
+    if tool_name in ("save_to_drive", "update_wiki"):
+        return "Executing an approved write."
+    return ""
+
+
+def _approval_reasoning() -> str:
+    return (
+        "The draft is strong enough to finalize — pausing for your explicit "
+        "approval before writing anything to Drive or the wiki."
+    )

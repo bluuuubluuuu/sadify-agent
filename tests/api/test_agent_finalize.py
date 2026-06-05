@@ -21,6 +21,7 @@ from sadify_api.agent.finalize import (
     build_finalize_agent,
     run_approved_actions,
     run_finalize,
+    stream_finalize_events,
 )
 from sadify_api.agent.tools import AgentDeps, build_agent_tool_functions
 from sadify_api.config import ApiConfig
@@ -750,6 +751,97 @@ def test_agent_approve_route_requires_auth_and_passes_approval(monkeypatch):
     assert captured["analysis_session_id"] == "session-route"
     assert captured["approval_id"] == "AP-route"
     assert captured["deps"].user.uid == "firebase-uid-001"
+
+
+def test_stream_finalize_events_yields_ordered_events_then_terminal():
+    deps, analysis_repository, _preview_repository, _analysis_model, _preview_model = (
+        _finalize_deps(preview_outputs=[_preview_payload()])
+    )
+    record = _save_ready_analysis(analysis_repository)
+    model = ScriptedLlm(
+        responses=[
+            _function_call("get_readiness", {"analysis_id": record.analysis_id}),
+            _function_call("generate_sad", {"analysis_id": record.analysis_id}),
+            types.Content(
+                role="model",
+                parts=[types.Part.from_text(text="Draft generated.")],
+            ),
+        ]
+    )
+    store = ApprovalStore()
+
+    items = list(
+        stream_finalize_events(
+            deps,
+            analysis_session_id="session-001",
+            model=model,
+            approval_store=store,
+        )
+    )
+
+    *events, terminal = items
+    tool_events = [item for item in events if item["type"] == "tool"]
+    assert [item["tool"] for item in tool_events] == ["get_readiness", "generate_sad"]
+    # Every tool event carries derived reasoning, not just a tool name.
+    assert all(item["reasoning"] for item in tool_events)
+    assert terminal["type"] == "status"
+    assert terminal["status"] == "awaiting_approval"
+    assert terminal["result"]["preview_id"] == "SP-000001"
+    assert terminal["result"]["approval_id"].startswith("AP-")
+    assert [action["id"] for action in terminal["result"]["proposed_actions"]] == [
+        "save_to_drive",
+        "update_wiki",
+    ]
+    assert store.get("session-001", terminal["result"]["approval_id"]) is not None
+
+
+def test_finalize_stream_route_returns_ndjson_event_stream(monkeypatch):
+    def fake_stream_finalize_events(
+        deps,
+        *,
+        analysis_session_id: str,
+        model: str,
+        approval_store,
+    ):
+        yield {
+            "type": "tool",
+            "tool": "get_readiness",
+            "summary": "Ready for preview: 76% readiness, Medium confidence.",
+            "reasoning": "Requirement readiness 76% with Medium confidence.",
+        }
+        yield {
+            "type": "status",
+            "status": "awaiting_approval",
+            "result": {"preview_id": "SP-ROUTE", "approval_id": "AP-ROUTE"},
+        }
+
+    from sadify_api.routes import agent as agent_route
+
+    monkeypatch.setattr(
+        agent_route, "stream_finalize_events", fake_stream_finalize_events
+    )
+    client = TestClient(
+        create_app(
+            config=ApiConfig(environment="test", sadify_model="gemini-2.5-flash"),
+            analysis_repository=RequirementAnalysisRepository(),
+            sad_preview_repository=SadPreviewRepository(),
+        )
+    )
+
+    response = client.post(
+        "/agent/finalize/stream",
+        json={"analysis_session_id": "session-route", "model": "not-in-catalog"},
+    )
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("application/x-ndjson")
+    lines = [line for line in response.text.split("\n") if line.strip()]
+    parsed = [json.loads(line) for line in lines]
+    assert parsed[0]["tool"] == "get_readiness"
+    assert parsed[0]["reasoning"]
+    assert parsed[-1]["type"] == "status"
+    assert parsed[-1]["status"] == "awaiting_approval"
+    assert parsed[-1]["result"]["approval_id"] == "AP-ROUTE"
 
 
 class ScriptedLlm(BaseLlm):
