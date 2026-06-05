@@ -24,6 +24,7 @@ export function PreviewPane({
   onSave,
   onUpdateWiki,
   onRefine,
+  onFinalizeWithAgent,
 }: {
   preview: SadPreviewResponse;
   record: SadSaveRecord | null;
@@ -37,6 +38,7 @@ export function PreviewPane({
   onSave: () => void;
   onUpdateWiki: () => void;
   onRefine: () => void;
+  onFinalizeWithAgent?: () => void;
 }) {
   return (
     <div className={styles.pane}>
@@ -190,6 +192,15 @@ export function PreviewPane({
             onClick={onUpdateWiki}
           >
             Update wiki
+          </Button>
+        ) : null}
+        {onFinalizeWithAgent ? (
+          <Button
+            variant="secondary"
+            leftIcon={<Icon name="sparkle" size={16} />}
+            onClick={onFinalizeWithAgent}
+          >
+            Finalize with agent
           </Button>
         ) : null}
         <Button

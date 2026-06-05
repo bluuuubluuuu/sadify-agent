@@ -376,6 +376,31 @@ export type DriveRepoDisconnectResponse = {
   repo: DriveRepoRecord | null;
 };
 
+export type AgentEvent = {
+  type: "tool" | "message" | "status";
+  tool: string | null;
+  summary: string;
+  reasoning: string | null;
+};
+
+export type AgentProposedAction = {
+  id: string;
+  label: string;
+  preview_id?: string;
+  changed_files?: string[];
+};
+
+export type AgentFinalizeStatus =
+  | "asked_clarification"
+  | "awaiting_approval"
+  | "completed";
+
+export type AgentFinalizeApiResponse = {
+  status: AgentFinalizeStatus;
+  events: AgentEvent[];
+  result: Record<string, unknown> | null;
+};
+
 const baseUrl = process.env.NEXT_PUBLIC_SADIFY_API_BASE_URL ?? "http://localhost:8000";
 
 export class BackendApiError extends Error {
@@ -805,6 +830,82 @@ export async function listProjectSaves(
     const detail = await readBackendErrorDetail(
       response,
       "Could not load saved SAD history for this project.",
+    );
+    throw new BackendApiError(detail.message, detail.code, response.status);
+  }
+
+  return response.json();
+}
+
+export async function streamAgentFinalize(
+  input: { analysisSessionId: string; model?: string },
+  onEvent: (event: AgentEvent & { status?: AgentFinalizeStatus; result?: Record<string, unknown> | null }) => void,
+): Promise<void> {
+  const response = await fetch(`${baseUrl}/agent/finalize/stream`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      analysis_session_id: input.analysisSessionId,
+      model: input.model ?? null,
+    }),
+  });
+
+  if (!response.ok || !response.body) {
+    throw new Error(
+      await readBackendError(response, "SADify agent could not finalize this draft yet."),
+    );
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  const flush = (chunk: string) => {
+    const line = chunk.trim();
+    if (line) {
+      onEvent(JSON.parse(line));
+    }
+  };
+
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) {
+      break;
+    }
+    buffer += decoder.decode(value, { stream: true });
+    let newlineIndex = buffer.indexOf("\n");
+    while (newlineIndex >= 0) {
+      flush(buffer.slice(0, newlineIndex));
+      buffer = buffer.slice(newlineIndex + 1);
+      newlineIndex = buffer.indexOf("\n");
+    }
+  }
+  flush(buffer);
+}
+
+export async function approveAgentActions(
+  input: { analysisSessionId: string; approvalId: string; model?: string },
+  idToken: string,
+): Promise<AgentFinalizeApiResponse> {
+  const response = await fetch(`${baseUrl}/agent/approve`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${idToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      analysis_session_id: input.analysisSessionId,
+      approval_id: input.approvalId,
+      model: input.model ?? null,
+    }),
+  });
+
+  if (!response.ok) {
+    const detail = await readBackendErrorDetail(
+      response,
+      "SADify agent could not run the approved save yet.",
     );
     throw new BackendApiError(detail.message, detail.code, response.status);
   }

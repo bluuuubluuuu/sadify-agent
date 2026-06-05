@@ -18,6 +18,7 @@ import { useSources } from "../lib/hooks/useSources";
 import { useQnA } from "../lib/hooks/useQnA";
 import { useSadSave } from "../lib/hooks/useSadSave";
 import { useModelCatalog } from "../lib/hooks/useModelCatalog";
+import { useAgentFinalize } from "../lib/hooks/useAgentFinalize";
 import { AppShell } from "./shell/AppShell";
 import { Sidebar } from "./shell/Sidebar";
 import { ConnectDriveBanner } from "./shell/ConnectDriveBanner";
@@ -27,6 +28,7 @@ import { ModelPicker } from "./chat/ModelPicker";
 import { ReadinessPane, PreviewPlaceholder } from "./chat/ReadinessPane";
 import { PreviewPane } from "./preview/PreviewPane";
 import { WikiDialog } from "./preview/WikiDialog";
+import { AgentTimeline } from "./agent/AgentTimeline";
 import { AttachChips } from "./chat/AttachChips";
 import { AutoTextarea } from "./ui/AutoTextarea";
 import { Button } from "./ui/Button";
@@ -81,6 +83,11 @@ export function WorkspaceV2() {
     selectedModel: models.isLoaded ? models.selectedModel : undefined,
     onProjectCreated: handleProjectCreated,
     onHistoryRefresh: () => setHistoryRefreshKey((key) => key + 1),
+  });
+
+  const agent = useAgentFinalize({
+    analysisSessionId,
+    selectedModel: models.isLoaded ? models.selectedModel : undefined,
   });
 
   // Preserve WorkspaceShell: fetch Drive status when a user is present.
@@ -184,6 +191,7 @@ export function WorkspaceV2() {
         onSave={() => sadSave.save()}
         onUpdateWiki={() => sadSave.updateWiki()}
         onRefine={() => sadSave.dismissPreview()}
+        onFinalizeWithAgent={() => agent.finalize()}
       />
     ) : stage === "clarify" && qna.analysis ? (
       <ReadinessPane
@@ -223,6 +231,18 @@ export function WorkspaceV2() {
           isBusy={sadSave.isProjectBusy}
           onSubmit={(name) => sadSave.createProjectForPending(name)}
           onCancel={sadSave.cancelProject}
+        />
+      ) : null}
+      {agent.isOpen ? (
+        <AgentTimeline
+          events={agent.events}
+          status={agent.status}
+          result={agent.result}
+          isStreaming={agent.isStreaming}
+          isApproving={agent.isApproving}
+          error={agent.error}
+          onApprove={() => agent.approve()}
+          onClose={agent.close}
         />
       ) : null}
     </>
