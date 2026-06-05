@@ -9,6 +9,12 @@ INTERNAL_DIAGNOSTIC_TERMS = (
     "validated",
 )
 
+REVISION_NO_FABRICATION_INSTRUCTION = (
+    "Revise the draft to address these issues using only facts already in the "
+    "requirement, sources, and Q&A answers. If a requested detail is not present, "
+    "do NOT invent it — keep it as an assumption or open question."
+)
+
 
 def build_sad_synthesis_context(
     *,
@@ -17,52 +23,61 @@ def build_sad_synthesis_context(
     analysis: RequirementAnalysisResponse,
     source_context: str | None,
     source_references: list[str],
+    revision_feedback: str | None = None,
 ) -> str:
     user_assumptions, internal_diagnostics = split_assumptions(analysis.assumptions)
     internal_diagnostics.extend(_questionnaire_diagnostics(analysis))
     source_label = ", ".join(source_references) if source_references else "Business Request"
     clean_request = clean_business_request(requirement_text)
-    return "\n".join(
-        [
-            f"Analysis ID: {analysis_id or 'not saved'}",
-            "",
-            "Layer 1 draft readiness:",
-            _draft_readiness_line(analysis),
-            "",
-            "Confirmed request facts:",
-            clean_request,
-            "",
-            "Current understanding:",
-            analysis.understanding_summary,
-            "",
-            "Cleared categories:",
-            "\n".join(_cleared_category_lines(analysis)),
-            "",
-            "Partial-evidence slots:",
-            "\n".join(_partial_evidence_lines(analysis)),
-            "",
-            "Deferred or unsure slots:",
-            "\n".join(_deferred_slot_lines(analysis)),
-            "",
-            "Confirmed questionnaire answers:",
-            "\n".join(_answer_lines(analysis)),
-            "",
-            "Unresolved items:",
-            "\n".join(_unresolved_lines(analysis)),
-            "",
-            "Business-facing assumptions:",
-            "\n".join(f"- {item}" for item in user_assumptions) or "- none",
-            "",
-            "Business source references:",
-            source_label,
-            "",
-            "Source context:",
-            (source_context or "").strip() or "none",
-            "",
-            "Internal diagnostics, not for SAD assumptions:",
-            "\n".join(f"- {item}" for item in internal_diagnostics) or "- none",
-        ]
-    )
+    parts = [
+        f"Analysis ID: {analysis_id or 'not saved'}",
+        "",
+        "Layer 1 draft readiness:",
+        _draft_readiness_line(analysis),
+        "",
+        "Confirmed request facts:",
+        clean_request,
+        "",
+        "Current understanding:",
+        analysis.understanding_summary,
+        "",
+        "Cleared categories:",
+        "\n".join(_cleared_category_lines(analysis)),
+        "",
+        "Partial-evidence slots:",
+        "\n".join(_partial_evidence_lines(analysis)),
+        "",
+        "Deferred or unsure slots:",
+        "\n".join(_deferred_slot_lines(analysis)),
+        "",
+        "Confirmed questionnaire answers:",
+        "\n".join(_answer_lines(analysis)),
+        "",
+        "Unresolved items:",
+        "\n".join(_unresolved_lines(analysis)),
+        "",
+        "Business-facing assumptions:",
+        "\n".join(f"- {item}" for item in user_assumptions) or "- none",
+        "",
+        "Business source references:",
+        source_label,
+        "",
+        "Source context:",
+        (source_context or "").strip() or "none",
+        "",
+        "Internal diagnostics, not for SAD assumptions:",
+        "\n".join(f"- {item}" for item in internal_diagnostics) or "- none",
+    ]
+    if revision_feedback:
+        parts.extend(
+            [
+                "",
+                "Revision feedback:",
+                REVISION_NO_FABRICATION_INSTRUCTION,
+                revision_feedback.strip(),
+            ]
+        )
+    return "\n".join(parts)
 
 
 _READY_STATUSES = {"ready", "complete"}

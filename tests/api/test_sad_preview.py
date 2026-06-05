@@ -151,6 +151,54 @@ def test_sad_preview_schema_is_vertex_compatible_and_small():
     }
 
 
+def test_sad_preview_context_without_revision_feedback_is_byte_identical():
+    analysis = RequirementAnalysisResponse.model_validate(VALID_ANALYSIS)
+    original = build_sad_preview_context(
+        requirement_text=CLINIC_REQUEST,
+        analysis_id="AN-000001",
+        analysis=analysis,
+        source_context="Clinic workflow source.",
+        source_references=["SRC-000001"],
+    )
+
+    with_absent_feedback = build_sad_preview_context(
+        requirement_text=CLINIC_REQUEST,
+        analysis_id="AN-000001",
+        analysis=analysis,
+        source_context="Clinic workflow source.",
+        source_references=["SRC-000001"],
+        revision_feedback=None,
+    )
+
+    assert with_absent_feedback == original
+
+
+def test_sad_preview_context_with_revision_feedback_contains_no_fabrication_guard():
+    analysis = RequirementAnalysisResponse.model_validate(VALID_ANALYSIS)
+
+    context = build_sad_preview_context(
+        requirement_text=CLINIC_REQUEST,
+        analysis_id="AN-000001",
+        analysis=analysis,
+        source_context="Clinic workflow source.",
+        source_references=["SRC-000001"],
+        revision_feedback=(
+            "Prior SAD draft summary:\n"
+            "- Workflow: Medicine collection is described too vaguely.\n\n"
+            "Review issues to address:\n"
+            "- high workflow: Workflow section is too vague."
+        ),
+    )
+
+    assert "Revision feedback:" in context
+    assert "Workflow section is too vague." in context
+    assert (
+        "Revise the draft to address these issues using only facts already in the "
+        "requirement, sources, and Q&A answers. If a requested detail is not "
+        "present, do NOT invent it"
+    ) in context
+
+
 def test_sad_preview_api_blocks_when_basics_are_missing():
     repository = SadPreviewRepository()
     model = FakeSadPreviewModel([VALID_PREVIEW.copy()])
@@ -468,6 +516,7 @@ def test_sad_preview_api_validates_model_output_and_saves_temporary_preview():
     assert saved.analysis_id == "AN-000001"
     assert isinstance(saved.created_at, datetime)
     assert "Source context" in model.requests[0][0]
+    assert "Revision feedback:" not in model.requests[0][0]
 
 
 def test_sad_preview_api_repairs_once_before_saving_valid_output():

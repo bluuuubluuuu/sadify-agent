@@ -36,7 +36,7 @@ from sadify_api.services.sad_flow import (
 )
 from sadify_api.services.sad_preview import SadPreviewRepository
 from sadify_api.services.sad_save import SadSaveRepository
-from sadify_api.services.secret_store import SecretStore
+from sadify_api.services.secret_store import SecretStore, get_secret_store
 from sadify_api.services.source_uploads import SourceRepository
 from sadify_api.services.wiki_state import WikiStateRepository
 
@@ -93,6 +93,8 @@ def build_agent_tools(deps: AgentDeps) -> list[BaseTool]:
 def build_agent_tool_functions(deps: AgentDeps) -> AgentToolFunctions:
     generation_count = 0
     last_generation_payload: ToolPayload | None = None
+    latest_review_payload: ToolPayload | None = None
+    latest_review_consumed = False
 
     def get_readiness(analysis_id: str) -> ToolPayload:
         """Return draft readiness for a saved analysis before deciding next action."""
@@ -165,7 +167,22 @@ def build_agent_tool_functions(deps: AgentDeps) -> AgentToolFunctions:
 
     def generate_sad(analysis_id: str) -> ToolPayload:
         """Generate a SAD preview from a saved analysis when readiness is sufficient."""
-        nonlocal generation_count, last_generation_payload
+        nonlocal generation_count, last_generation_payload, latest_review_consumed
+        revision_feedback = None
+        if last_generation_payload is not None:
+            if (
+                latest_review_payload is None
+                or latest_review_payload.get("preview_id")
+                != last_generation_payload.get("preview_id")
+                or latest_review_payload.get("verdict") != "regenerate"
+                or latest_review_consumed
+            ):
+                return dict(last_generation_payload)
+            revision_feedback = _build_revision_feedback(
+                last_generation_payload,
+                latest_review_payload,
+            )
+
         if (
             deps.max_sad_generations is not None
             and generation_count >= deps.max_sad_generations
@@ -203,6 +220,7 @@ def build_agent_tool_functions(deps: AgentDeps) -> AgentToolFunctions:
                 ),
                 model=deps.sad_preview_model,
                 repository=deps.sad_preview_repository,
+                revision_feedback=revision_feedback,
             )
         except SadPreviewBlockedError as exc:
             generation_count += 1
@@ -229,13 +247,16 @@ def build_agent_tool_functions(deps: AgentDeps) -> AgentToolFunctions:
         }
         generation_count += 1
         last_generation_payload = payload
+        if revision_feedback is not None:
+            latest_review_consumed = True
         return payload
 
     def review_sad(preview_id: str) -> ToolPayload:
         """Review a saved SAD preview and return an advisory quality verdict."""
+        nonlocal latest_review_payload, latest_review_consumed
         record = deps.sad_preview_repository.get_preview(preview_id)
         if record is None:
-            return {
+            payload = {
                 "preview_id": preview_id,
                 "verdict": "ask",
                 "issues": [
@@ -246,8 +267,14 @@ def build_agent_tool_functions(deps: AgentDeps) -> AgentToolFunctions:
                     }
                 ],
             }
+            latest_review_payload = payload
+            latest_review_consumed = False
+            return payload
         if deps.sad_review_model is None:
-            return {"preview_id": preview_id, "verdict": "proceed", "issues": []}
+            payload = {"preview_id": preview_id, "verdict": "proceed", "issues": []}
+            latest_review_payload = payload
+            latest_review_consumed = False
+            return payload
 
         review = parse_sad_review(
             deps.sad_review_model.review_sad(
@@ -266,6 +293,8 @@ def build_agent_tool_functions(deps: AgentDeps) -> AgentToolFunctions:
             and generation_count >= deps.max_sad_generations
         ):
             payload["regenerate_cap_reached"] = True
+        latest_review_payload = payload
+        latest_review_consumed = False
         return payload
 
     def save_to_drive(preview_id: str) -> ToolPayload:
@@ -395,6 +424,55 @@ def _review_sad_context(record) -> str:
         "SAD preview JSON:\n"
         f"{record.preview.model_dump_json()}"
     )
+
+
+def _build_revision_feedback(
+    prior_draft: ToolPayload,
+    review: ToolPayload,
+) -> str:
+    return "\n\n".join(
+        [
+            "Prior SAD draft summary:\n" + "\n".join(_draft_section_lines(prior_draft)),
+            "Review issues to address:\n" + "\n".join(_review_issue_lines(review)),
+        ]
+    )
+
+
+def _draft_section_lines(prior_draft: ToolPayload) -> list[str]:
+    sections = prior_draft.get("sections")
+    if not isinstance(sections, list):
+        return ["- none"]
+    lines: list[str] = []
+    for section in sections:
+        if not isinstance(section, dict):
+            continue
+        title = str(section.get("title") or "Untitled").strip()
+        body = _compact_text(str(section.get("body") or ""))
+        lines.append(f"- {title}: {body or 'empty'}")
+    return lines or ["- none"]
+
+
+def _review_issue_lines(review: ToolPayload) -> list[str]:
+    issues = review.get("issues")
+    if not isinstance(issues, list):
+        return ["- none"]
+    lines: list[str] = []
+    for issue in issues:
+        if not isinstance(issue, dict):
+            continue
+        severity = str(issue.get("severity") or "unknown").strip()
+        category = str(issue.get("category") or "general").strip()
+        message = _compact_text(str(issue.get("message") or ""))
+        if message:
+            lines.append(f"- {severity} {category}: {message}")
+    return lines or ["- none"]
+
+
+def _compact_text(value: str, *, limit: int = 420) -> str:
+    compact = " ".join(value.split())
+    if len(compact) <= limit:
+        return compact
+    return f"{compact[: limit - 3].rstrip()}..."
 
 
 def _require_write_approval(
@@ -542,14 +620,7 @@ def _build_wiki_context(deps: AgentDeps) -> WikiFlowContext:
         for source_id in latest_save.manifest.source_ids
         if (source := deps.source_repository.get_source(source_id)) is not None
     ]
-    drive_client = deps.drive_client
-    secret_store = deps.secret_store
-    if drive_client is None or secret_store is None:
-        raise WikiFlowError(
-            503,
-            "WIKI_LIVE_MODE_DISABLED",
-            "Live wiki updates are disabled for this process.",
-        )
+    drive_client, secret_store = _resolve_live_wiki_services(deps)
     refresh_token = secret_store.get_user_refresh_token(deps.user.uid)
     if not refresh_token:
         raise WikiFlowError(
@@ -574,6 +645,22 @@ def _build_wiki_context(deps: AgentDeps) -> WikiFlowContext:
         drive_client=drive_client,
         access_token=access_token,
     )
+
+
+def _resolve_live_wiki_services(deps: AgentDeps) -> tuple[DriveClient, SecretStore]:
+    assert deps.config is not None
+    if deps.drive_client is not None and deps.secret_store is not None:
+        return deps.drive_client, deps.secret_store
+
+    secret_store = deps.secret_store or get_secret_store(
+        project_id=deps.config.google_cloud_project,
+        oauth_client_secret_name=deps.config.google_oauth_client_secret_name,
+    )
+    drive_client = deps.drive_client or DriveClient(
+        client_id=deps.config.google_oauth_client_id,
+        client_secret=secret_store.get_oauth_client_secret(),
+    )
+    return drive_client, secret_store
 
 
 def _active_project(deps: AgentDeps, repo) -> Any:

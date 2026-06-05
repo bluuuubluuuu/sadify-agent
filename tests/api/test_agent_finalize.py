@@ -216,6 +216,96 @@ def test_run_finalize_reviews_weak_draft_regenerates_once_then_completes():
         "update_wiki",
     ]
     assert [repair for _context, repair in preview_model.requests] == [False, False]
+    assert "Workflow section is too vague." in preview_model.requests[1][0]
+
+
+def test_agent_generate_sad_consumes_regenerate_review_once_with_feedback():
+    deps, analysis_repository, _preview_repository, _analysis_model, preview_model = (
+        _finalize_deps(
+            preview_outputs=[
+                _preview_payload(),
+                _preview_payload(),
+                _preview_payload(),
+            ],
+            review_outputs=[
+                {
+                    "verdict": "regenerate",
+                    "issues": [
+                        {
+                            "severity": "high",
+                            "category": "workflow",
+                            "message": "Workflow section is too vague.",
+                        }
+                    ],
+                }
+            ],
+        )
+    )
+    record = _save_ready_analysis(analysis_repository)
+    tool_functions = build_agent_tool_functions(deps)
+
+    first = tool_functions.generate_sad(record.analysis_id)
+    review = tool_functions.review_sad(first["preview_id"])
+    second = tool_functions.generate_sad(record.analysis_id)
+    third = tool_functions.generate_sad(record.analysis_id)
+
+    assert review["verdict"] == "regenerate"
+    assert first["preview_id"] == "SP-000001"
+    assert second["preview_id"] == "SP-000002"
+    assert third["preview_id"] == "SP-000002"
+    assert len(preview_model.requests) == 2
+    second_context = preview_model.requests[1][0]
+    assert "Prior SAD draft summary:" in second_context
+    assert "Review issues to address:" in second_context
+    assert "Workflow section is too vague." in second_context
+    assert "do NOT invent it" in second_context
+
+
+def test_run_finalize_tighten_existing_draft_does_not_redraw_and_awaits_approval():
+    deps, analysis_repository, _preview_repository, _analysis_model, preview_model = (
+        _finalize_deps(
+            preview_outputs=[_preview_payload(), _preview_payload()],
+            review_outputs=[
+                {
+                    "verdict": "tighten",
+                    "issues": [
+                        {
+                            "severity": "medium",
+                            "category": "reports",
+                            "message": "Report wording can be tighter.",
+                        }
+                    ],
+                }
+            ],
+        )
+    )
+    record = _save_ready_analysis(analysis_repository)
+    model = ScriptedLlm(
+        responses=[
+            _function_call("get_readiness", {"analysis_id": record.analysis_id}),
+            _function_call("generate_sad", {"analysis_id": record.analysis_id}),
+            _function_call("review_sad", {"preview_id": "SP-000001"}),
+            _function_call("generate_sad", {"analysis_id": record.analysis_id}),
+            types.Content(
+                role="model",
+                parts=[types.Part.from_text(text="Keeping the tightened draft.")],
+            ),
+        ]
+    )
+
+    result = run_finalize(
+        deps,
+        analysis_session_id="session-001",
+        model=model,
+    )
+
+    assert result["status"] == "awaiting_approval"
+    assert result["result"]["preview_id"] == "SP-000001"
+    assert len(preview_model.requests) == 1
+    assert (
+        "Review remaining issue: Report wording can be tighter."
+        in result["result"]["open_questions"]
+    )
 
 
 def test_run_finalize_honors_regenerate_cap_and_surfaces_remaining_issues():
@@ -695,6 +785,40 @@ def test_run_finalize_not_ready_asks_one_clarification_and_stops():
     assert [repair for _text, repair in analysis_model.requests] == [False]
 
 
+def test_run_finalize_blocked_basics_still_asks_clarification():
+    deps, analysis_repository, _preview_repository, analysis_model, preview_model = (
+        _finalize_deps(analysis_outputs=[_analysis_payload()])
+    )
+    record = _save_analysis(analysis_repository, analysis_session_id="session-003")
+    model = ScriptedLlm(
+        responses=[
+            _function_call("get_readiness", {"analysis_id": record.analysis_id}),
+            _function_call("generate_sad", {"analysis_id": record.analysis_id}),
+            _function_call(
+                "ask_clarification",
+                {"analysis_session_id": "session-003"},
+            ),
+            types.Content(
+                role="model",
+                parts=[types.Part.from_text(text="Clarification requested.")],
+            ),
+        ]
+    )
+
+    result = run_finalize(
+        deps,
+        analysis_session_id="session-003",
+        model=model,
+    )
+
+    assert result["status"] == "asked_clarification"
+    assert result["result"]["question"] == (
+        "What business goal should this request help achieve?"
+    )
+    assert preview_model.requests == []
+    assert [repair for _text, repair in analysis_model.requests] == [False]
+
+
 def test_agent_finalize_route_resolves_model_and_returns_response(monkeypatch):
     captured = {}
 
@@ -898,6 +1022,73 @@ def test_finalize_stream_route_returns_ndjson_event_stream(monkeypatch):
     assert parsed[-1]["type"] == "status"
     assert parsed[-1]["status"] == "awaiting_approval"
     assert parsed[-1]["result"]["approval_id"] == "AP-ROUTE"
+
+
+def test_run_finalize_drafts_when_agent_only_checks_readiness():
+    # Weak models (e.g. Flash-Lite) sometimes call get_readiness then stop
+    # without drafting. The deterministic safety-net must still produce a draft
+    # so finalize never returns a phantom approval with no approval_id.
+    deps, analysis_repository, _preview_repository, _analysis_model, preview_model = (
+        _finalize_deps(preview_outputs=[_preview_payload()])
+    )
+    record = _save_ready_analysis(analysis_repository)
+    model = ScriptedLlm(
+        responses=[
+            _function_call("get_readiness", {"analysis_id": record.analysis_id}),
+            types.Content(
+                role="model",
+                parts=[types.Part.from_text(text="Readiness looks strong.")],
+            ),
+        ]
+    )
+
+    result = run_finalize(
+        deps,
+        analysis_session_id="session-001",
+        model=model,
+    )
+
+    assert result["status"] == "awaiting_approval"
+    assert result["result"]["approval_id"].startswith("AP-")
+    assert result["result"]["preview_id"] == "SP-000001"
+    tool_events = [e["tool"] for e in result["events"] if e["type"] == "tool"]
+    assert "get_readiness" in tool_events
+    assert "generate_sad" in tool_events  # produced by the safety-net
+    assert len(preview_model.requests) == 1
+
+
+def test_stream_finalize_drafts_when_agent_only_checks_readiness():
+    deps, analysis_repository, _preview_repository, _analysis_model, _preview_model = (
+        _finalize_deps(preview_outputs=[_preview_payload()])
+    )
+    record = _save_ready_analysis(analysis_repository)
+    model = ScriptedLlm(
+        responses=[
+            _function_call("get_readiness", {"analysis_id": record.analysis_id}),
+            types.Content(
+                role="model",
+                parts=[types.Part.from_text(text="Readiness looks strong.")],
+            ),
+        ]
+    )
+    store = ApprovalStore()
+
+    items = list(
+        stream_finalize_events(
+            deps,
+            analysis_session_id="session-001",
+            model=model,
+            approval_store=store,
+        )
+    )
+
+    *events, terminal = items
+    tool_events = [e["tool"] for e in events if e["type"] == "tool"]
+    assert "generate_sad" in tool_events  # safety-net draft is streamed
+    assert terminal["type"] == "status"
+    assert terminal["status"] == "awaiting_approval"
+    assert terminal["result"]["approval_id"].startswith("AP-")
+    assert terminal["result"]["preview_id"] == "SP-000001"
 
 
 class ScriptedLlm(BaseLlm):

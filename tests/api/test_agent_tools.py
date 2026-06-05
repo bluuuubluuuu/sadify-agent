@@ -9,9 +9,19 @@ from sadify_api.agent.tools import (
     build_agent_tool_functions,
     build_agent_tools,
 )
-from sadify_api.schemas import RequirementAnalysisResponse
+from sadify_api.config import ApiConfig
+from sadify_api.schemas import (
+    DriveRepoConnectRequest,
+    RequirementAnalysisResponse,
+    SadPreviewResponse,
+)
 from sadify_api.services.analysis_state import RequirementAnalysisRepository
+from sadify_api.services.drive_repo import DriveRepoRepository
+from sadify_api.services.projects import ProjectRepository
 from sadify_api.services.sad_preview import SadPreviewRepository
+from sadify_api.services.sad_save import SadSaveRepository
+from sadify_api.services.source_uploads import SourceRepository
+from sadify_api.services.wiki_state import WikiStateRepository
 from tests.api.test_gemini_structured import (
     FakeRequirementAnalysisModel,
     VALID_PAYLOAD,
@@ -223,6 +233,112 @@ def test_write_tool_accepts_matching_approval_and_runs_injected_save():
     assert len(calls) == 1
 
 
+def test_agent_wiki_update_resolves_live_drive_services_without_injected_deps(
+    monkeypatch,
+):
+    from sadify_api.agent import tools as agent_tools
+
+    contexts = []
+
+    class FakeSecretStore:
+        def get_oauth_client_secret(self) -> str:
+            return "client-secret"
+
+        def get_user_refresh_token(self, uid: str) -> str:
+            assert uid == "firebase-uid-001"
+            return "refresh-token"
+
+    class FakeDriveClient:
+        def __init__(self, *, client_id: str, client_secret: str) -> None:
+            assert client_id == "client-id"
+            assert client_secret == "client-secret"
+
+        def refresh_access_token(self, refresh_token: str) -> str:
+            assert refresh_token == "refresh-token"
+            return "access-token"
+
+    class FakeWikiUpdateResponse:
+        files = [object(), object()]
+
+    def fake_wiki_update_runner(**kwargs):
+        contexts.append(kwargs["context"])
+        return FakeWikiUpdateResponse()
+
+    monkeypatch.setattr(
+        agent_tools,
+        "get_secret_store",
+        lambda **_kwargs: FakeSecretStore(),
+        raising=False,
+    )
+    monkeypatch.setattr(agent_tools, "DriveClient", FakeDriveClient)
+
+    drive_repo_repository = DriveRepoRepository()
+    project_repository = ProjectRepository()
+    preview_repository = SadPreviewRepository()
+    sad_save_repository = SadSaveRepository()
+    repo = drive_repo_repository.connect_repo(
+        owner_uid="firebase-uid-001",
+        owner_email="owner@example.com",
+        request=DriveRepoConnectRequest(
+            authorization_code="unused-local-code",
+            create_new_repo=True,
+            project_id="PR-000001",
+            repo_folder_name="SADify Projects",
+        ),
+    )
+    project = project_repository.create_project(
+        grant_id=repo.grant_id,
+        name="Repair Shop Job Tracker",
+        drive_folder_id="PROJECT-FOLDER-001",
+    )
+    drive_repo_repository.set_active_project(grant_id=repo.grant_id, project=project)
+    preview_record = preview_repository.save_preview(
+        requirement_text="Need to validate an operational workflow.",
+        analysis_id="AN-000001",
+        preview=SadPreviewResponse.model_validate(VALID_PREVIEW),
+    )
+    sad_save_repository.save_preview(
+        owner_uid="firebase-uid-001",
+        owner_email="owner@example.com",
+        repo=repo,
+        project_id=project.project_id,
+        preview_record=preview_record,
+        sources=[],
+    )
+    deps, *_ = _agent_deps(
+        write_approval=WriteApproval(
+            approval_id="AP-test",
+            actions=[
+                {
+                    "id": "update_wiki",
+                    "label": "Update project wiki",
+                    "preview_id": preview_record.preview_id,
+                }
+            ],
+        ),
+        drive_repo_repository=drive_repo_repository,
+        project_repository=project_repository,
+        sad_save_repository=sad_save_repository,
+        source_repository=SourceRepository(),
+        wiki_state_repository=WikiStateRepository(),
+        config=ApiConfig(
+            environment="test",
+            google_cloud_project="sadify",
+            google_oauth_client_id="client-id",
+            drive_mode="live",
+            drive_live_enabled=True,
+        ),
+        wiki_update_runner=fake_wiki_update_runner,
+    )
+    tool_functions = build_agent_tool_functions(deps)
+
+    result = tool_functions.update_wiki(False)
+
+    assert result == {"status": "updated", "file_count": 2}
+    assert contexts[0].access_token == "access-token"
+    assert contexts[0].drive_client.__class__.__name__ == "FakeDriveClient"
+
+
 def _agent_deps(
     *,
     analysis_outputs: list[dict[str, object]] | None = None,
@@ -230,6 +346,13 @@ def _agent_deps(
     review_outputs: list[dict[str, object]] | None = None,
     write_approval: WriteApproval | None = None,
     sad_save_runner=None,
+    drive_repo_repository=None,
+    source_repository=None,
+    sad_save_repository=None,
+    config=None,
+    wiki_state_repository=None,
+    project_repository=None,
+    wiki_update_runner=None,
 ):
     analysis_repository = RequirementAnalysisRepository()
     preview_repository = SadPreviewRepository()
@@ -248,6 +371,13 @@ def _agent_deps(
             user=FakeUser(),
             write_approval=write_approval,
             sad_save_runner=sad_save_runner,
+            drive_repo_repository=drive_repo_repository,
+            source_repository=source_repository,
+            sad_save_repository=sad_save_repository,
+            config=config,
+            wiki_state_repository=wiki_state_repository,
+            project_repository=project_repository,
+            wiki_update_runner=wiki_update_runner,
         ),
         analysis_repository,
         preview_repository,

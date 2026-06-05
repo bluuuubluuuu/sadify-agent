@@ -108,6 +108,7 @@ def run_sad_preview(
     request: SadPreviewRequest,
     model: SadPreviewModel,
     repository: SadPreviewRepository,
+    revision_feedback: str | None = None,
 ) -> SadPreviewRecord:
     clean_request = clean_business_request(request.requirement_text)
     missing_basics = missing_blocking_basics(
@@ -124,6 +125,7 @@ def run_sad_preview(
         analysis=request.analysis,
         source_context=request.source_context,
         source_references=request.source_references,
+        revision_feedback=revision_feedback,
     )
     for repair in (False, True):
         raw_json = ""

@@ -169,6 +169,7 @@ def build_sad_preview_context(
     analysis: RequirementAnalysisResponse,
     source_context: str | None,
     source_references: list[str],
+    revision_feedback: str | None = None,
 ) -> str:
     return build_sad_synthesis_context(
         requirement_text=requirement_text,
@@ -176,6 +177,7 @@ def build_sad_preview_context(
         analysis=analysis,
         source_context=source_context,
         source_references=source_references,
+        revision_feedback=revision_feedback,
     )
 
 

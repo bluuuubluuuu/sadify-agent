@@ -99,6 +99,14 @@ def run_finalize(
             ),
         }
 
+    events.extend(
+        _ensure_draft_attempted(
+            deps,
+            tool_deps,
+            analysis_session_id=analysis_session_id,
+            tool_results=tool_results,
+        )
+    )
     status, result = _terminal_from_tool_results(
         tool_results,
         store=store,
@@ -109,6 +117,53 @@ def run_finalize(
         "events": events,
         "result": result,
     }
+
+
+def _ensure_draft_attempted(
+    deps: AgentDeps,
+    tool_deps: AgentDeps,
+    *,
+    analysis_session_id: str,
+    tool_results: list[tuple[str, dict[str, Any]]],
+) -> list[dict[str, Any]]:
+    """Deterministic safety-net so finalize never returns a phantom approval.
+
+    Weak models sometimes call get_readiness and then stop without drafting.
+    If the agent ended without ever attempting a draft or a clarification,
+    produce one draft (and self-review) here. The LLM still drives the happy
+    path; this only fills the gap so a draft is guaranteed whenever one is
+    producible. If the draft is blocked by a missing basic, the terminal stays
+    asked_clarification.
+    """
+    if any(name in ("generate_sad", "ask_clarification") for name, _ in tool_results):
+        return []
+    latest = deps.analysis_repository.latest_for_session(analysis_session_id)
+    if latest is None:
+        return []
+    tool_functions = build_agent_tool_functions(tool_deps)
+    generated = tool_functions.generate_sad(latest.analysis_id)
+    tool_results.append(("generate_sad", generated))
+    events = [
+        {
+            "type": "tool",
+            "tool": "generate_sad",
+            "summary": _tool_summary("generate_sad", generated),
+            "reasoning": _tool_reasoning("generate_sad", generated),
+        }
+    ]
+    preview_id = generated.get("preview_id")
+    if preview_id:
+        reviewed = tool_functions.review_sad(str(preview_id))
+        tool_results.append(("review_sad", reviewed))
+        events.append(
+            {
+                "type": "tool",
+                "tool": "review_sad",
+                "summary": _tool_summary("review_sad", reviewed),
+                "reasoning": _tool_reasoning("review_sad", reviewed),
+            }
+        )
+    return events
 
 
 def stream_finalize_events(
@@ -172,6 +227,14 @@ def stream_finalize_events(
             ),
         }
         return
+
+    for extra_event in _ensure_draft_attempted(
+        deps,
+        tool_deps,
+        analysis_session_id=analysis_session_id,
+        tool_results=tool_results,
+    ):
+        yield extra_event
 
     status, result = _terminal_from_tool_results(
         tool_results,
@@ -374,8 +437,9 @@ def _finalize_message(
         f"latest_analysis_id: {latest_analysis_id}\n"
         "The existing Q&A answers are the source of truth. Trust them and do "
         "NOT re-ask anything the user already answered. "
-        "First inspect readiness when an analysis id is available, then call "
-        "generate_sad. If generate_sad reports it is blocked by a missing "
+        "First inspect readiness when an analysis id is available, then you MUST "
+        "call generate_sad — never stop after only checking readiness. If "
+        "generate_sad reports it is blocked by a missing "
         "basic, stop and return that one clarification. Otherwise a draft "
         "exists: call review_sad on it. If review_sad says regenerate, you may "
         "call generate_sad again and review the new draft. If it says proceed, "
