@@ -55,6 +55,27 @@ def test_agent_timeline_renders_reasoning_and_approval():
     assert ".reasoning" in css
     assert ".timeline" in css
     assert ".approval" in css
+    # Genuine block (rare) routes back to the one chat surface, and handles the
+    # missing-basics shape as well as a single question.
+    assert "Continue in chat" in timeline
+    assert "onContinueInChat" in timeline
+    assert "result.missing_basics" in timeline
+
+
+def test_chat_footer_makes_agent_the_hero_action():
+    chat = (WEB_SRC / "components" / "chat" / "ChatPanel.tsx").read_text(
+        encoding="utf-8"
+    )
+    css = (WEB_SRC / "components" / "chat" / "chat.module.css").read_text(
+        encoding="utf-8"
+    )
+
+    assert "onFinalizeWithAgent?: () => void" in chat
+    assert "Finalize with agent" in chat
+    assert "Generate SAD preview" in chat
+    # Agent is the single primary CTA; manual generate is demoted to secondary.
+    assert 'variant={onFinalizeWithAgent ? "secondary" : "primary"}' in chat
+    assert ".readyActions" in css
 
 
 def test_workspace_wires_agent_finalize_overlay():
@@ -68,6 +89,7 @@ def test_workspace_wires_agent_finalize_overlay():
     assert "onFinalizeWithAgent={() => agent.finalize()}" in workspace
     assert "<AgentTimeline" in workspace
     assert "onApprove={() => agent.approve()}" in workspace
+    assert "onContinueInChat={agent.close}" in workspace
     # Additive: the manual save flow is untouched.
     assert "onSave={() => sadSave.save()}" in workspace
     assert "onFinalizeWithAgent?: () => void" in preview

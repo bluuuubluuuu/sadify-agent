@@ -147,6 +147,11 @@
   margin: 0 0 6px;
   font-size: var(--fs-sec);
 }
+.clarifyList {
+  margin: 0 0 8px;
+  padding-left: 18px;
+  font-size: var(--fs-sec);
+}
 .clarifyHint {
   margin: 0;
   font-size: 12px;

@@ -19,6 +19,8 @@ type AgentResult = {
   preview_id?: string;
   proposed_actions?: AgentProposedAction[];
   question?: string;
+  why?: string;
+  missing_basics?: string[];
   actions?: Array<Record<string, unknown>>;
 };
 
@@ -30,6 +32,7 @@ export function AgentTimeline({
   isApproving,
   error,
   onApprove,
+  onContinueInChat,
   onClose,
 }: {
   events: AgentEvent[];
@@ -39,6 +42,7 @@ export function AgentTimeline({
   isApproving: boolean;
   error: string;
   onApprove: () => void;
+  onContinueInChat: () => void;
   onClose: () => void;
 }) {
   return (
@@ -116,11 +120,35 @@ export function AgentTimeline({
 
         {status === "asked_clarification" ? (
           <div className={styles.clarify}>
-            <p className={styles.clarifyTitle}>The agent needs one more answer</p>
-            {result?.question ? <p className={styles.clarifyQ}>{result.question}</p> : null}
-            <p className={styles.clarifyHint}>
-              Answer it back in the chat, then finalize again.
+            <p className={styles.clarifyTitle}>
+              I need one basic before I can draft a solid SAD
             </p>
+            {result?.question ? (
+              <p className={styles.clarifyQ}>{result.question}</p>
+            ) : result?.missing_basics && result.missing_basics.length ? (
+              <ul className={styles.clarifyList}>
+                {result.missing_basics.map((basic) => (
+                  <li key={basic}>{basic}</li>
+                ))}
+              </ul>
+            ) : (
+              <p className={styles.clarifyQ}>
+                A little more detail is needed before I can finalize.
+              </p>
+            )}
+            {result?.why ? <p className={styles.clarifyHint}>{result.why}</p> : null}
+            <div className={styles.bar}>
+              <Button
+                variant="primary"
+                leftIcon={<Icon name="arrowRight" size={16} color="#fff" />}
+                onClick={onContinueInChat}
+              >
+                Continue in chat
+              </Button>
+              <Button variant="ghost" onClick={onClose}>
+                Not now
+              </Button>
+            </div>
           </div>
         ) : null}
 

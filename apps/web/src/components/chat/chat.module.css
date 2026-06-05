@@ -441,6 +441,7 @@
   gap: 12px;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
 }
 .readyText {
   font-size: 13.5px;
@@ -449,6 +450,12 @@
   display: flex;
   gap: 8px;
   align-items: center;
+}
+.readyActions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex: none;
 }
 .errorMsg {
   font-size: 12px;

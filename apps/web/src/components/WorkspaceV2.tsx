@@ -152,6 +152,7 @@ export function WorkspaceV2() {
       onModelChange={models.setSelectedModel}
       generating={sadSave.generating}
       onGenerate={() => sadSave.generate()}
+      onFinalizeWithAgent={() => agent.finalize()}
       banner={
         !connected ? <ConnectDriveBanner onConnect={() => driveActions.connect()} /> : undefined
       }
@@ -242,6 +243,7 @@ export function WorkspaceV2() {
           isApproving={agent.isApproving}
           error={agent.error}
           onApprove={() => agent.approve()}
+          onContinueInChat={agent.close}
           onClose={agent.close}
         />
       ) : null}

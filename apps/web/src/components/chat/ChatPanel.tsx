@@ -28,6 +28,7 @@ export function ChatPanel({
   onModelChange,
   generating,
   onGenerate,
+  onFinalizeWithAgent,
   banner,
 }: {
   qna: QnA;
@@ -40,6 +41,7 @@ export function ChatPanel({
   onModelChange: (modelId: string) => void;
   generating?: boolean;
   onGenerate: () => void;
+  onFinalizeWithAgent?: () => void;
   banner?: ReactNode;
 }) {
   const fileRef = useRef<HTMLInputElement>(null);
@@ -126,13 +128,30 @@ export function ChatPanel({
         {generating ? (
           <PhaseStepper phases={GEN_PHASES} active={genPhase} />
         ) : (
-          <Button
-            variant="primary"
-            leftIcon={<Icon name="arrowRight" size={16} color="#fff" />}
-            onClick={onGenerate}
-          >
-            Generate SAD preview
-          </Button>
+          <div className={styles.readyActions}>
+            {onFinalizeWithAgent ? (
+              <Button
+                variant="primary"
+                leftIcon={<Icon name="sparkle" size={16} color="#fff" />}
+                onClick={onFinalizeWithAgent}
+              >
+                Finalize with agent
+              </Button>
+            ) : null}
+            <Button
+              variant={onFinalizeWithAgent ? "secondary" : "primary"}
+              leftIcon={
+                <Icon
+                  name="arrowRight"
+                  size={16}
+                  color={onFinalizeWithAgent ? undefined : "#fff"}
+                />
+              }
+              onClick={onGenerate}
+            >
+              Generate SAD preview
+            </Button>
+          </div>
         )}
       </div>
     </>
