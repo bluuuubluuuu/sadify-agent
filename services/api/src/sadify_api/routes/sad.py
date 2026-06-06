@@ -42,7 +42,11 @@ from sadify_api.services.sad_preview import SadPreviewRepository
 from sadify_api.services.sad_save import SadSaveRepository
 from sadify_api.services.projects import ProjectRepository
 from sadify_api.services.wiki_state import WikiStateRepository
-from sadify_api.services.secret_store import SecretStore, get_secret_store
+from sadify_api.services.secret_store import SecretStore
+from sadify_api.services.live_drive import (
+    LiveDriveServicesDisabledError,
+    resolve_live_drive_services,
+)
 from sadify_api.services.source_uploads import SourceRepository
 
 
@@ -200,24 +204,14 @@ def _resolve_live_services(
     drive_client: DriveClient | None,
     secret_store: SecretStore | None,
 ) -> tuple[DriveClient, SecretStore]:
-    if drive_client is not None and secret_store is not None:
-        return drive_client, secret_store
-    if not config.drive_live_enabled:
+    try:
+        return resolve_live_drive_services(config, drive_client, secret_store)
+    except LiveDriveServicesDisabledError as exc:
         raise _sad_save_error(
             503,
             "SAD_SAVE_LIVE_MODE_DISABLED",
             "Live Drive save is disabled for this process.",
-        )
-
-    resolved_secret_store = secret_store or get_secret_store(
-        project_id=config.google_cloud_project,
-        oauth_client_secret_name=config.google_oauth_client_secret_name,
-    )
-    resolved_drive_client = drive_client or DriveClient(
-        client_id=config.google_oauth_client_id,
-        client_secret=resolved_secret_store.get_oauth_client_secret(),
-    )
-    return resolved_drive_client, resolved_secret_store
+        ) from exc
 
 
 def _sad_save_error(status_code: int, code: str, message: str) -> HTTPException:

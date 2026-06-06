@@ -36,7 +36,11 @@ from sadify_api.services.sad_flow import (
 )
 from sadify_api.services.sad_preview import SadPreviewRepository
 from sadify_api.services.sad_save import SadSaveRepository
-from sadify_api.services.secret_store import SecretStore, get_secret_store
+from sadify_api.services.secret_store import SecretStore
+from sadify_api.services.live_drive import (
+    LiveDriveServicesDisabledError,
+    resolve_live_drive_services,
+)
 from sadify_api.services.source_uploads import SourceRepository
 from sadify_api.services.wiki_state import WikiStateRepository
 
@@ -649,18 +653,18 @@ def _build_wiki_context(deps: AgentDeps) -> WikiFlowContext:
 
 def _resolve_live_wiki_services(deps: AgentDeps) -> tuple[DriveClient, SecretStore]:
     assert deps.config is not None
-    if deps.drive_client is not None and deps.secret_store is not None:
-        return deps.drive_client, deps.secret_store
-
-    secret_store = deps.secret_store or get_secret_store(
-        project_id=deps.config.google_cloud_project,
-        oauth_client_secret_name=deps.config.google_oauth_client_secret_name,
-    )
-    drive_client = deps.drive_client or DriveClient(
-        client_id=deps.config.google_oauth_client_id,
-        client_secret=secret_store.get_oauth_client_secret(),
-    )
-    return drive_client, secret_store
+    try:
+        return resolve_live_drive_services(
+            deps.config,
+            deps.drive_client,
+            deps.secret_store,
+        )
+    except LiveDriveServicesDisabledError as exc:
+        raise WikiFlowError(
+            503,
+            "WIKI_LIVE_MODE_DISABLED",
+            "Live wiki updates are disabled for this process.",
+        ) from exc
 
 
 def _active_project(deps: AgentDeps, repo) -> Any:

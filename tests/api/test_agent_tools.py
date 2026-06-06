@@ -236,7 +236,7 @@ def test_write_tool_accepts_matching_approval_and_runs_injected_save():
 def test_agent_wiki_update_resolves_live_drive_services_without_injected_deps(
     monkeypatch,
 ):
-    from sadify_api.agent import tools as agent_tools
+    from sadify_api.services import live_drive
 
     contexts = []
 
@@ -265,12 +265,11 @@ def test_agent_wiki_update_resolves_live_drive_services_without_injected_deps(
         return FakeWikiUpdateResponse()
 
     monkeypatch.setattr(
-        agent_tools,
+        live_drive,
         "get_secret_store",
         lambda **_kwargs: FakeSecretStore(),
-        raising=False,
     )
-    monkeypatch.setattr(agent_tools, "DriveClient", FakeDriveClient)
+    monkeypatch.setattr(live_drive, "DriveClient", FakeDriveClient)
 
     drive_repo_repository = DriveRepoRepository()
     project_repository = ProjectRepository()
