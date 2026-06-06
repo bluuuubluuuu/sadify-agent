@@ -5,12 +5,16 @@ import pytest
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
+from sadify_api.config import ApiConfig
 from sadify_api.main import create_app
 from sadify_api.schemas import RequirementAnalysisResponse
 from sadify_api.services.analysis_state import RequirementAnalysisRepository
 from sadify_api.services.gemini_structured import (
+    GeminiDevTaskExtractionModel,
     RequirementAnalysisModel,
     _sad_preview_prompt,
+    dev_task_extraction_schema,
+    parse_dev_task_extraction,
     parse_requirement_analysis,
     requirement_analysis_schema,
 )
@@ -127,6 +131,26 @@ class FakeRequirementAnalysisModel(RequirementAnalysisModel):
         return json.dumps(output)
 
 
+class FakeGenaiClient:
+    def __init__(self, output: dict[str, object]) -> None:
+        self.models = FakeGenaiModels(output)
+
+
+class FakeGenaiModels:
+    def __init__(self, output: dict[str, object]) -> None:
+        self.output = output
+        self.requests: list[dict[str, object]] = []
+
+    def generate_content(self, **kwargs):
+        self.requests.append(kwargs)
+        return FakeGenaiResponse(json.dumps(self.output))
+
+
+class FakeGenaiResponse:
+    def __init__(self, text: str) -> None:
+        self.text = text
+
+
 def test_parse_requirement_analysis_accepts_schema_valid_json():
     parsed = parse_requirement_analysis(json.dumps(VALID_PAYLOAD))
 
@@ -145,6 +169,71 @@ def test_parse_requirement_analysis_rejects_score_outside_bounds():
 
     with pytest.raises(ValidationError):
         parse_requirement_analysis(json.dumps(payload))
+
+
+def test_parse_dev_task_extraction_accepts_priority_task_description_refs():
+    parsed = parse_dev_task_extraction(
+        json.dumps(
+            {
+                "tasks": [
+                    {
+                        "priority": "high",
+                        "title": "Build order intake",
+                        "description": "Capture order details from the SAD.",
+                        "source_references": ["SRC-000001"],
+                    }
+                ]
+            }
+        )
+    )
+
+    assert parsed.tasks[0].priority == "high"
+    assert parsed.tasks[0].title == "Build order intake"
+    assert parsed.tasks[0].source_references == ["SRC-000001"]
+
+
+def test_dev_task_extraction_schema_requires_traceability_fields():
+    schema = dev_task_extraction_schema()
+    task_schema = schema["properties"]["tasks"]["items"]
+
+    assert task_schema["required"] == [
+        "priority",
+        "title",
+        "description",
+        "source_references",
+    ]
+    assert task_schema["properties"]["priority"]["enum"] == ["high", "medium", "low"]
+
+
+def test_gemini_dev_task_model_uses_structured_schema_and_no_fabrication_prompt():
+    client = FakeGenaiClient(
+        {
+            "tasks": [
+                {
+                    "priority": "high",
+                    "title": "Build order intake",
+                    "description": "Capture order details from the SAD.",
+                    "source_references": ["SRC-000001"],
+                }
+            ]
+        }
+    )
+    model = GeminiDevTaskExtractionModel(
+        ApiConfig(environment="test"),
+        client_factory=lambda: client,
+    )
+
+    raw = model.extract_dev_tasks(
+        "SAD preview JSON:\n{\"source_references\":[\"SRC-000001\"]}",
+        model="gemini-2.5-flash",
+    )
+
+    assert json.loads(raw)["tasks"][0]["source_references"] == ["SRC-000001"]
+    request = client.models.requests[0]
+    assert request["model"] == "gemini-2.5-flash"
+    assert request["config"]["response_schema"] == dev_task_extraction_schema()
+    assert "Do not invent" in request["contents"]
+    assert "source_references" in request["contents"]
 
 
 def test_requirement_analysis_schema_is_vertex_compatible_and_small():

@@ -22,6 +22,7 @@ from sadify_api.services.analysis_state import RequirementAnalysisRepository
 from sadify_api.services.drive_client import DriveClient
 from sadify_api.services.drive_repo import DriveRepoRepository
 from sadify_api.services.gemini_structured import (
+    DevTaskExtractionModel,
     RequirementAnalysisModel,
     SadPreviewModel,
     SadReviewModel,
@@ -51,6 +52,7 @@ def create_agent_router(
     wiki_state_repository: WikiStateRepository,
     project_repository: ProjectRepository | None,
     sad_review_model: SadReviewModel | None = None,
+    dev_task_model: DevTaskExtractionModel | None = None,
     approval_store: ApprovalStore | None = None,
 ) -> APIRouter:
     router = APIRouter(prefix="/agent", tags=["agent"])
@@ -124,6 +126,7 @@ def create_agent_router(
             analysis_model=analysis_model,
             sad_preview_model=sad_preview_model,
             sad_review_model=sad_review_model,
+            dev_task_model=dev_task_model,
             selected_model=resolved_model,
             user=user,
             drive_repo_repository=drive_repo_repository,

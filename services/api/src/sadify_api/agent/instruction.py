@@ -21,4 +21,7 @@ Keep developer tasks traceable to requirements or sources. Do not invent
 business rules, skip critical missing information, hide assumptions, confuse
 severity with priority, overfit to one demo domain, claim custom training, or
 move trustworthy export/wiki behavior into UI-only code.
+
+Do not call extract_dev_tasks during normal SAD finalization. Use it only when
+the user explicitly asks for developer tasks from an approved SAD preview.
 """.strip()

@@ -42,6 +42,7 @@ def test_agent_instruction_mirrors_behavior_contract_guardrails():
     assert "open questions" in instruction
     assert "without explicit approval" in instruction
     assert "traceable" in instruction
+    assert "do not call extract_dev_tasks during normal sad finalization" in instruction
     assert "low-confidence" in instruction
 
 
@@ -55,6 +56,7 @@ def test_build_agent_tools_exposes_adk_function_tools():
         "ask_clarification",
         "generate_sad",
         "review_sad",
+        "extract_dev_tasks",
         "save_to_drive",
         "update_wiki",
     ]
@@ -177,6 +179,131 @@ def test_review_sad_returns_structured_advisory_verdict():
                 "message": "Workflow is too vague for a useful SAD.",
             }
         ],
+    }
+
+
+def test_extract_dev_tasks_returns_traceable_task_list():
+    deps, analysis_repository, _preview_repository, _analysis_model, _preview_model = (
+        _agent_deps(
+            preview_outputs=[_preview_payload()],
+            dev_task_outputs=[
+                {
+                    "tasks": [
+                        {
+                            "priority": "high",
+                            "title": "Build order intake",
+                            "description": "Capture the order details described in the SAD.",
+                            "source_references": ["SRC-000001"],
+                        }
+                    ]
+                }
+            ],
+            write_approval=_preview_write_approval("SP-000001"),
+        )
+    )
+    analysis = RequirementAnalysisResponse.model_validate(
+        _analysis_with_blocking_basics()
+    )
+    record = analysis_repository.save_analysis(
+        requirement_text="Need to validate an operational workflow.",
+        analysis_session_id="session-001",
+        analysis=analysis,
+    )
+    tool_functions = build_agent_tool_functions(deps)
+    preview = tool_functions.generate_sad(record.analysis_id)
+
+    result = tool_functions.extract_dev_tasks(preview["preview_id"])
+
+    assert result == {
+        "status": "ready",
+        "preview_id": "SP-000001",
+        "tasks": [
+            {
+                "priority": "high",
+                "title": "Build order intake",
+                "description": "Capture the order details described in the SAD.",
+                "source_references": ["SRC-000001"],
+            }
+        ],
+    }
+
+
+def test_extract_dev_tasks_requires_approved_preview_before_model_call():
+    deps, analysis_repository, _preview_repository, _analysis_model, _preview_model = (
+        _agent_deps(
+            preview_outputs=[_preview_payload()],
+            dev_task_outputs=[
+                {
+                    "tasks": [
+                        {
+                            "priority": "high",
+                            "title": "Build order intake",
+                            "description": "Capture the order details described in the SAD.",
+                            "source_references": ["SRC-000001"],
+                        }
+                    ]
+                }
+            ],
+        )
+    )
+    analysis = RequirementAnalysisResponse.model_validate(
+        _analysis_with_blocking_basics()
+    )
+    record = analysis_repository.save_analysis(
+        requirement_text="Need to validate an operational workflow.",
+        analysis_session_id="session-001",
+        analysis=analysis,
+    )
+    tool_functions = build_agent_tool_functions(deps)
+    preview = tool_functions.generate_sad(record.analysis_id)
+
+    result = tool_functions.extract_dev_tasks(preview["preview_id"])
+
+    assert result == {
+        "status": "error",
+        "code": "DEV_TASKS_APPROVAL_REQUIRED",
+        "message": "Approve this SAD preview before extracting developer tasks.",
+    }
+    assert deps.dev_task_model is not None
+    assert deps.dev_task_model.requests == []
+
+
+def test_extract_dev_tasks_rejects_ungrounded_model_tasks():
+    deps, analysis_repository, _preview_repository, _analysis_model, _preview_model = (
+        _agent_deps(
+            preview_outputs=[_preview_payload()],
+            dev_task_outputs=[
+                {
+                    "tasks": [
+                        {
+                            "priority": "medium",
+                            "title": "Invent loyalty points",
+                            "description": "Add a loyalty program not present in the SAD.",
+                            "source_references": ["SRC-MISSING"],
+                        }
+                    ]
+                }
+            ],
+            write_approval=_preview_write_approval("SP-000001"),
+        )
+    )
+    analysis = RequirementAnalysisResponse.model_validate(
+        _analysis_with_blocking_basics()
+    )
+    record = analysis_repository.save_analysis(
+        requirement_text="Need to validate an operational workflow.",
+        analysis_session_id="session-001",
+        analysis=analysis,
+    )
+    tool_functions = build_agent_tool_functions(deps)
+    preview = tool_functions.generate_sad(record.analysis_id)
+
+    result = tool_functions.extract_dev_tasks(preview["preview_id"])
+
+    assert result == {
+        "status": "error",
+        "code": "DEV_TASKS_UNGROUNDED",
+        "message": "Developer task has no valid source references: Invent loyalty points",
     }
 
 
@@ -343,6 +470,7 @@ def _agent_deps(
     analysis_outputs: list[dict[str, object]] | None = None,
     preview_outputs: list[dict[str, object]] | None = None,
     review_outputs: list[dict[str, object]] | None = None,
+    dev_task_outputs: list[dict[str, object]] | None = None,
     write_approval: WriteApproval | None = None,
     sad_save_runner=None,
     drive_repo_repository=None,
@@ -360,6 +488,7 @@ def _agent_deps(
     )
     preview_model = FakeSadPreviewModel(preview_outputs or [_preview_payload()])
     review_model = FakeSadReviewModel(review_outputs or [_review_payload()])
+    dev_task_model = FakeDevTaskModel(dev_task_outputs or [_dev_task_payload()])
     return (
         AgentDeps(
             analysis_repository=analysis_repository,
@@ -367,6 +496,7 @@ def _agent_deps(
             analysis_model=analysis_model,
             sad_preview_model=preview_model,
             sad_review_model=review_model,
+            dev_task_model=dev_task_model,
             user=FakeUser(),
             write_approval=write_approval,
             sad_save_runner=sad_save_runner,
@@ -409,12 +539,39 @@ def _review_payload() -> dict[str, object]:
     return {"verdict": "proceed", "issues": []}
 
 
+def _dev_task_payload() -> dict[str, object]:
+    return {"tasks": []}
+
+
+def _preview_write_approval(preview_id: str) -> WriteApproval:
+    return WriteApproval(
+        approval_id="AP-test",
+        actions=[
+            {
+                "id": "save_to_drive",
+                "label": "Save SAD to Google Drive",
+                "preview_id": preview_id,
+            }
+        ],
+    )
+
+
 class FakeSadReviewModel:
     def __init__(self, outputs: list[dict[str, object]]) -> None:
         self.outputs = list(outputs)
         self.requests: list[tuple[str, str | None]] = []
 
     def review_sad(self, context: str, *, model: str | None = None) -> str:
+        self.requests.append((context, model))
+        return json.dumps(self.outputs.pop(0))
+
+
+class FakeDevTaskModel:
+    def __init__(self, outputs: list[dict[str, object]]) -> None:
+        self.outputs = list(outputs)
+        self.requests: list[tuple[str, str | None]] = []
+
+    def extract_dev_tasks(self, context: str, *, model: str | None = None) -> str:
         self.requests.append((context, model))
         return json.dumps(self.outputs.pop(0))
 

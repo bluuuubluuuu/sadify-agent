@@ -3,6 +3,7 @@ from typing import Protocol
 
 from sadify_api.config import ApiConfig
 from sadify_api.schemas import (
+    DevTaskExtractionResponse,
     RequirementAnalysisResponse,
     SadPreviewResponse,
     SadReviewResponse,
@@ -43,6 +44,16 @@ class SadReviewModel(Protocol):
         """Return structured self-audit output as raw JSON text."""
 
 
+class DevTaskExtractionModel(Protocol):
+    def extract_dev_tasks(
+        self,
+        context: str,
+        *,
+        model: str | None = None,
+    ) -> str:
+        """Return structured developer-task output as raw JSON text."""
+
+
 def parse_requirement_analysis(raw_json: str) -> RequirementAnalysisResponse:
     return RequirementAnalysisResponse.model_validate_json(raw_json)
 
@@ -53,6 +64,10 @@ def parse_sad_preview(raw_json: str) -> SadPreviewResponse:
 
 def parse_sad_review(raw_json: str) -> SadReviewResponse:
     return SadReviewResponse.model_validate_json(raw_json)
+
+
+def parse_dev_task_extraction(raw_json: str) -> DevTaskExtractionResponse:
+    return DevTaskExtractionResponse.model_validate_json(raw_json)
 
 
 def requirement_analysis_schema() -> dict[str, object]:
@@ -346,6 +361,46 @@ def sad_review_schema() -> dict[str, object]:
     }
 
 
+def dev_task_extraction_schema() -> dict[str, object]:
+    return {
+        "type": "OBJECT",
+        "properties": {
+            "tasks": {
+                "type": "ARRAY",
+                "items": {
+                    "type": "OBJECT",
+                    "properties": {
+                        "priority": {
+                            "type": "STRING",
+                            "enum": ["high", "medium", "low"],
+                        },
+                        "title": {"type": "STRING"},
+                        "description": {"type": "STRING"},
+                        "source_references": {
+                            "type": "ARRAY",
+                            "items": {"type": "STRING"},
+                        },
+                    },
+                    "required": [
+                        "priority",
+                        "title",
+                        "description",
+                        "source_references",
+                    ],
+                    "propertyOrdering": [
+                        "priority",
+                        "title",
+                        "description",
+                        "source_references",
+                    ],
+                },
+            },
+        },
+        "required": ["tasks"],
+        "propertyOrdering": ["tasks"],
+    }
+
+
 ClientFactory = Callable[[], object]
 
 
@@ -558,6 +613,32 @@ class GeminiSadReviewModel:
         return response.text or ""
 
 
+class GeminiDevTaskExtractionModel:
+    def __init__(
+        self,
+        config: ApiConfig,
+        client_factory: ClientFactory | None = None,
+    ) -> None:
+        self._config = config
+        self._client_factory = client_factory or (lambda: _create_genai_client(config))
+
+    def extract_dev_tasks(
+        self,
+        context: str,
+        *,
+        model: str | None = None,
+    ) -> str:
+        client = self._client_factory()
+        response = _generate_content_with_model_fallback(
+            client=client,
+            requested_model=model,
+            config=self._config,
+            contents=_dev_task_extraction_prompt(context),
+            response_schema=dev_task_extraction_schema(),
+        )
+        return response.text or ""
+
+
 def _sad_preview_prompt(context: str, *, repair: bool) -> str:
     repair_instruction = (
         "Your previous SAD preview failed validation. Return corrected JSON only. "
@@ -612,5 +693,19 @@ def _sad_review_prompt(context: str) -> str:
         "an advisory self-audit; do not perform sentence-level traceability. Keep "
         "issue messages concise and business-readable.\n\n"
         "SAD draft context:\n"
+        f"{context}"
+    )
+
+
+def _dev_task_extraction_prompt(context: str) -> str:
+    return (
+        "You are SADify's developer-task planner. Create concise implementation "
+        "tasks from the SAD preview only. Return Priority/Task/Description style "
+        "items using priority values high, medium, or low. Every task must include "
+        "at least one source_references value copied exactly from the SAD section "
+        "or preview source references. Do not invent tasks, systems, integrations, "
+        "roles, reports, or scope that are not supported by the SAD. If a useful "
+        "task cannot be grounded to an existing source_references value, omit it. "
+        "Return JSON only.\n\n"
         f"{context}"
     )

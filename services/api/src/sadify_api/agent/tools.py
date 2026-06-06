@@ -16,9 +16,14 @@ from sadify_api.schemas import (
 )
 from sadify_api.services.analysis_flow import run_analysis_turn
 from sadify_api.services.analysis_state import RequirementAnalysisRepository
+from sadify_api.services.dev_tasks import (
+    DevTaskGroundingError,
+    extract_dev_tasks as extract_dev_tasks_from_preview,
+)
 from sadify_api.services.drive_client import DriveClient, DriveTokenInvalidError
 from sadify_api.services.drive_repo import DriveRepoRepository
 from sadify_api.services.gemini_structured import (
+    DevTaskExtractionModel,
     RequirementAnalysisModel,
     SadPreviewModel,
     SadReviewModel,
@@ -55,6 +60,7 @@ class AgentDeps:
     analysis_model: RequirementAnalysisModel
     sad_preview_model: SadPreviewModel
     sad_review_model: SadReviewModel | None = None
+    dev_task_model: DevTaskExtractionModel | None = None
     selected_model: str | None = None
     max_sad_generations: int | None = None
     user: AuthenticatedUser | None = None
@@ -78,6 +84,7 @@ class AgentToolFunctions:
     ask_clarification: Callable[[str], ToolPayload]
     generate_sad: Callable[[str], ToolPayload]
     review_sad: Callable[[str], ToolPayload]
+    extract_dev_tasks: Callable[[str], ToolPayload]
     save_to_drive: Callable[[str], ToolPayload]
     update_wiki: Callable[[bool], ToolPayload]
 
@@ -89,6 +96,7 @@ def build_agent_tools(deps: AgentDeps) -> list[BaseTool]:
         FunctionTool(tool_functions.ask_clarification),
         FunctionTool(tool_functions.generate_sad),
         FunctionTool(tool_functions.review_sad),
+        FunctionTool(tool_functions.extract_dev_tasks),
         FunctionTool(_adk_write_tool(tool_functions.save_to_drive)),
         FunctionTool(_adk_write_tool(tool_functions.update_wiki)),
     ]
@@ -301,6 +309,55 @@ def build_agent_tool_functions(deps: AgentDeps) -> AgentToolFunctions:
         latest_review_consumed = False
         return payload
 
+    def extract_dev_tasks(preview_id: str) -> ToolPayload:
+        """Extract source-grounded developer tasks from a saved SAD preview."""
+        record = deps.sad_preview_repository.get_preview(preview_id)
+        if record is None:
+            return {
+                "status": "error",
+                "code": "PREVIEW_NOT_FOUND",
+                "message": "Generate a SAD preview before extracting developer tasks.",
+            }
+        if deps.write_approval is None or not (
+            deps.write_approval.allows("save_to_drive", preview_id=preview_id)
+            or deps.write_approval.allows("extract_dev_tasks", preview_id=preview_id)
+        ):
+            return {
+                "status": "error",
+                "code": "DEV_TASKS_APPROVAL_REQUIRED",
+                "message": "Approve this SAD preview before extracting developer tasks.",
+            }
+        if deps.dev_task_model is None:
+            return {
+                "status": "skipped",
+                "preview_id": preview_id,
+                "tasks": [],
+                "reason": "Developer task extraction model is unavailable.",
+            }
+        try:
+            tasks = extract_dev_tasks_from_preview(
+                preview=record.preview,
+                model=deps.dev_task_model,
+                selected_model=deps.selected_model,
+            )
+        except DevTaskGroundingError as exc:
+            return {
+                "status": "error",
+                "code": "DEV_TASKS_UNGROUNDED",
+                "message": str(exc),
+            }
+        except Exception as exc:
+            return {
+                "status": "error",
+                "code": "DEV_TASKS_MODEL_ERROR",
+                "message": str(exc),
+            }
+        return {
+            "status": "ready",
+            "preview_id": preview_id,
+            "tasks": [task.model_dump() for task in tasks],
+        }
+
     def save_to_drive(preview_id: str) -> ToolPayload:
         """Save the SAD preview to Drive only after explicit approval."""
         _require_write_approval(
@@ -393,6 +450,7 @@ def build_agent_tool_functions(deps: AgentDeps) -> AgentToolFunctions:
         ask_clarification=ask_clarification,
         generate_sad=generate_sad,
         review_sad=review_sad,
+        extract_dev_tasks=extract_dev_tasks,
         save_to_drive=save_to_drive,
         update_wiki=update_wiki,
     )

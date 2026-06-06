@@ -448,6 +448,9 @@ def _finalize_message(
         "call generate_sad again and review the new draft. If it says proceed, "
         "tighten, or ask, stop with the best draft — minor gaps belong in the "
         "draft's open questions, not in a new question to the user. "
+        "Do not call extract_dev_tasks during this finalize/save flow; "
+        "developer tasks are a separate user-requested step after an approved "
+        "SAD preview. "
         "The backend will request explicit approval after a ready draft. Do not "
         "write to Drive, wiki, or GitHub without approval."
     )

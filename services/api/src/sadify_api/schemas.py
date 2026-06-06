@@ -323,6 +323,17 @@ class SadReviewResponse(ApiModel):
     issues: list[SadReviewIssue] = Field(default_factory=list)
 
 
+class DevTask(ApiModel):
+    priority: Literal["high", "medium", "low"]
+    title: str = Field(min_length=1)
+    description: str = Field(min_length=1)
+    source_references: list[str] = Field(default_factory=list)
+
+
+class DevTaskExtractionResponse(ApiModel):
+    tasks: list[DevTask] = Field(default_factory=list)
+
+
 class SadPreviewRequest(ApiModel):
     requirement_text: str = Field(min_length=5)
     analysis_id: str | None = None

@@ -118,6 +118,7 @@ def test_build_finalize_agent_uses_adk_agent_with_task_tools():
         "ask_clarification",
         "generate_sad",
         "review_sad",
+        "extract_dev_tasks",
         "save_to_drive",
         "update_wiki",
     ]

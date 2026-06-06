@@ -16,6 +16,8 @@ from sadify_api.routes.sources import create_sources_router
 from sadify_api.services.auth import FirebaseAdminTokenVerifier, TokenVerifier
 from sadify_api.services.analysis_state import RequirementAnalysisRepository
 from sadify_api.services.gemini_structured import (
+    DevTaskExtractionModel,
+    GeminiDevTaskExtractionModel,
     GeminiSadReviewModel,
     GeminiSadPreviewModel,
     GeminiRequirementAnalysisModel,
@@ -52,6 +54,7 @@ def create_app(
     drive_repo_repository: DriveRepoRepository | None = None,
     sad_preview_model: SadPreviewModel | None = None,
     sad_review_model: SadReviewModel | None = None,
+    dev_task_model: DevTaskExtractionModel | None = None,
     sad_preview_repository: SadPreviewRepository | None = None,
     sad_save_repository: SadSaveRepository | None = None,
     drive_client: DriveClient | None = None,
@@ -75,6 +78,7 @@ def create_app(
     )
     sad_preview_model = sad_preview_model or GeminiSadPreviewModel(config)
     sad_review_model = sad_review_model or GeminiSadReviewModel(config)
+    dev_task_model = dev_task_model or GeminiDevTaskExtractionModel(config)
     sad_preview_repository = sad_preview_repository or SadPreviewRepository()
     sad_save_repository = sad_save_repository or (
         FirestoreSadSaveRepository(firestore_client)
@@ -117,6 +121,7 @@ def create_app(
             wiki_state_repository=wiki_state_repository,
             project_repository=project_repository,
             sad_review_model=sad_review_model,
+            dev_task_model=dev_task_model,
         )
     )
     app.include_router(create_auth_router(token_verifier))
