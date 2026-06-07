@@ -109,6 +109,51 @@ def test_create_github_issues_refuses_missing_token_without_calling_api():
     assert client.calls == []
 
 
+def test_create_github_issues_approval_mode_returns_proposal_without_token_or_api_call():
+    client = FakeGitHubClient([])
+
+    result = asyncio.run(
+        create_github_issues_payload(
+            GitHubIssueBatch(
+                repo="acme/app",
+                issues=[
+                    GitHubIssue(
+                        title="Build appointment workflow",
+                        body="Implement the appointment workflow.",
+                        labels=["sadify", "priority-high"],
+                    )
+                ],
+            ),
+            configured_repo="acme/app",
+            token_provider=lambda: "",
+            client_factory=lambda: client,
+            approval_required=True,
+        )
+    )
+
+    assert result == {
+        "approval_required": True,
+        "tool": "create_github_issues",
+        "repo": "acme/app",
+        "proposed_actions": [
+            {
+                "id": "create_github_issues",
+                "label": "Create GitHub issues",
+                "repo": "acme/app",
+                "issue_count": 1,
+                "issues": [
+                    {
+                        "title": "Build appointment workflow",
+                        "body": "Implement the appointment workflow.",
+                        "labels": ["sadify", "priority-high"],
+                    }
+                ],
+            }
+        ],
+    }
+    assert client.calls == []
+
+
 def test_create_github_issues_rejects_unconfigured_repo_without_calling_api():
     client = FakeGitHubClient([])
 

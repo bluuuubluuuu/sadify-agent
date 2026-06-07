@@ -54,6 +54,19 @@ class AgentApproveRequest(ApiModel):
     model: str | None = None
 
 
+class AgentGitHubIssuesPrepareRequest(ApiModel):
+    analysis_session_id: str = Field(min_length=1)
+    preview_id: str = Field(min_length=1)
+    repo: str | None = None
+    model: str | None = None
+
+
+class AgentGitHubIssuesApproveRequest(ApiModel):
+    analysis_session_id: str = Field(min_length=1)
+    approval_id: str = Field(min_length=1)
+    model: str | None = None
+
+
 class AgentEvent(ApiModel):
     type: Literal["tool", "message"]
     tool: str | None = None

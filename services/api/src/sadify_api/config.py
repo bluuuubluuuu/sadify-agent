@@ -19,6 +19,8 @@ class ApiConfig:
     google_oauth_client_secret_name: str = "sadify-drive-oauth-client-secret"
     drive_live_enabled: bool = False
     persistence_mode: Literal["memory", "firestore"] = "memory"
+    github_mcp_enabled: bool = False
+    github_repo: str = ""
 
 
 def load_api_config() -> ApiConfig:
@@ -68,6 +70,8 @@ def load_api_config() -> ApiConfig:
         ),
         drive_live_enabled=_env_bool("SADIFY_DRIVE_LIVE_ENABLED", default=False),
         persistence_mode=persistence_mode,
+        github_mcp_enabled=_env_bool("SADIFY_GITHUB_MCP_ENABLED", default=False),
+        github_repo=os.getenv("SADIFY_GITHUB_REPO", "").strip(),
     )
 
 

@@ -16,6 +16,13 @@ from sadify_api.schemas import (
     AgentApproveRequest,
     AgentFinalizeRequest,
     AgentFinalizeResponse,
+    AgentGitHubIssuesApproveRequest,
+    AgentGitHubIssuesPrepareRequest,
+)
+from sadify_api.services.github_issue_flow import (
+    GitHubIssueFlowError,
+    approve_github_issues,
+    prepare_github_issues,
 )
 from sadify_api.services.auth import TokenVerifier
 from sadify_api.services.analysis_state import RequirementAnalysisRepository
@@ -115,6 +122,43 @@ def create_agent_router(
             ) from exc
         return AgentFinalizeResponse.model_validate(result)
 
+    @router.post("/github/issues/prepare", response_model=AgentFinalizeResponse)
+    def prepare_github_issue_creation(
+        request: AgentGitHubIssuesPrepareRequest,
+    ) -> AgentFinalizeResponse:
+        try:
+            result = prepare_github_issues(
+                preview_repository=sad_preview_repository,
+                dev_task_model=dev_task_model,
+                config=config,
+                analysis_session_id=request.analysis_session_id,
+                preview_id=request.preview_id,
+                repo=request.repo,
+                model=resolve_gemini_model(request.model, config),
+                approval_store=approval_store,
+            )
+        except GitHubIssueFlowError as exc:
+            raise _github_http_error(exc) from exc
+        return AgentFinalizeResponse.model_validate(result)
+
+    @router.post("/github/issues/approve", response_model=AgentFinalizeResponse)
+    def approve_github_issue_creation(
+        request: AgentGitHubIssuesApproveRequest,
+        authorization: str | None = Header(default=None),
+    ) -> AgentFinalizeResponse:
+        user = verify_authorization_header(authorization, token_verifier)
+        try:
+            result = approve_github_issues(
+                config=config,
+                analysis_session_id=request.analysis_session_id,
+                approval_id=request.approval_id,
+                approval_store=approval_store,
+                user=user,
+            )
+        except GitHubIssueFlowError as exc:
+            raise _github_http_error(exc) from exc
+        return AgentFinalizeResponse.model_validate(result)
+
     def _agent_deps(
         *,
         resolved_model: str,
@@ -140,3 +184,13 @@ def create_agent_router(
         )
 
     return router
+
+
+def _github_http_error(exc: GitHubIssueFlowError) -> HTTPException:
+    return HTTPException(
+        status_code=exc.status_code,
+        detail={
+            "code": exc.code,
+            "message": exc.message,
+        },
+    )

@@ -12,6 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 GITHUB_API_BASE_URL = "https://api.github.com"
 GITHUB_TOKEN_ENV = "SADIFY_GITHUB_TOKEN"
 GITHUB_REPO_ENV = "SADIFY_GITHUB_REPO"
+GITHUB_APPROVAL_REQUIRED_ENV = "SADIFY_GITHUB_APPROVAL_REQUIRED"
 
 mcp = FastMCP(
     "github_mcp",
@@ -122,6 +123,7 @@ async def create_github_issues_payload(
     configured_repo: str | None = None,
     token_provider: TokenProvider | None = None,
     client_factory: ClientFactory | None = None,
+    approval_required: bool | None = None,
 ) -> dict[str, Any]:
     """Create issues with injectable auth/client seams for tests and future Secret Manager."""
 
@@ -137,6 +139,17 @@ async def create_github_issues_payload(
             "status": "error",
             "code": "GITHUB_REPO_NOT_ALLOWED",
             "message": f"This MCP server is configured only for repo {allowed_repo}.",
+        }
+
+    should_request_approval = (
+        approval_required if approval_required is not None else _approval_required()
+    )
+    if should_request_approval:
+        return {
+            "approval_required": True,
+            "tool": "create_github_issues",
+            "repo": allowed_repo,
+            "proposed_actions": [_approval_action(allowed_repo, batch.issues)],
         }
 
     token = (token_provider or _github_token)()
@@ -179,6 +192,15 @@ def _github_token() -> str | None:
     return os.getenv(GITHUB_TOKEN_ENV)
 
 
+def _approval_required() -> bool:
+    return os.getenv(GITHUB_APPROVAL_REQUIRED_ENV, "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
 def _github_client_factory() -> AsyncGitHubClient:
     return httpx.AsyncClient(timeout=30.0)
 
@@ -199,6 +221,23 @@ def _issue_payload(issue: GitHubIssue) -> dict[str, Any]:
     if issue.labels:
         payload["labels"] = list(issue.labels)
     return payload
+
+
+def _approval_action(repo: str, issues: list[GitHubIssue]) -> dict[str, Any]:
+    return {
+        "id": "create_github_issues",
+        "label": "Create GitHub issues",
+        "repo": repo,
+        "issue_count": len(issues),
+        "issues": [
+            {
+                "title": issue.title,
+                "body": issue.body,
+                "labels": list(issue.labels),
+            }
+            for issue in issues
+        ],
+    }
 
 
 def _github_api_error(response: Any) -> dict[str, Any]:
