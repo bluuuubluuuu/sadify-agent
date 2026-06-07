@@ -19,10 +19,13 @@ export function PreviewPane({
   canUpdateWiki,
   isSaving,
   isWikiBusy,
+  isGithubPreparing = false,
   saveMessage,
   wikiMessage,
+  githubSetupNotice = "",
   onSave,
   onUpdateWiki,
+  onPrepareGithubIssues,
   onRefine,
 }: {
   preview: SadPreviewResponse;
@@ -32,10 +35,13 @@ export function PreviewPane({
   canUpdateWiki: boolean;
   isSaving: boolean;
   isWikiBusy: boolean;
+  isGithubPreparing?: boolean;
   saveMessage: string;
   wikiMessage: string;
+  githubSetupNotice?: string;
   onSave: () => void;
   onUpdateWiki: () => void;
+  onPrepareGithubIssues?: () => void;
   onRefine: () => void;
 }) {
   return (
@@ -114,6 +120,29 @@ export function PreviewPane({
               </a>
             ) : null}
           </div>
+        ) : null}
+
+        {Boolean(record) && onPrepareGithubIssues ? (
+          <div className={styles.githubHandoff}>
+            <Icon name="openExternal" size={18} color="var(--c-primary)" />
+            <span>
+              <b>Developer handoff</b>
+              <span>Create source-grounded GitHub issues from this approved SAD.</span>
+            </span>
+            <Button
+              variant="secondary"
+              loading={isGithubPreparing}
+              disabled={Boolean(githubSetupNotice)}
+              leftIcon={<Icon name="openExternal" size={13} />}
+              onClick={onPrepareGithubIssues}
+            >
+              Prepare GitHub issues
+            </Button>
+          </div>
+        ) : null}
+
+        {githubSetupNotice ? (
+          <div className={styles.setupNotice}>{githubSetupNotice}</div>
         ) : null}
 
         {preview.sections.map((section) => (

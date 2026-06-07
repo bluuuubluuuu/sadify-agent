@@ -19,6 +19,7 @@ import { useQnA } from "../lib/hooks/useQnA";
 import { useSadSave } from "../lib/hooks/useSadSave";
 import { useModelCatalog } from "../lib/hooks/useModelCatalog";
 import { useAgentFinalize } from "../lib/hooks/useAgentFinalize";
+import { useAgentGithubIssues } from "../lib/hooks/useAgentGithubIssues";
 import { AppShell } from "./shell/AppShell";
 import { Sidebar } from "./shell/Sidebar";
 import { ConnectDriveBanner } from "./shell/ConnectDriveBanner";
@@ -89,6 +90,10 @@ export function WorkspaceV2() {
     analysisSessionId,
     selectedModel: models.isLoaded ? models.selectedModel : undefined,
     onSaved: () => setHistoryRefreshKey((key) => key + 1),
+  });
+  const githubIssues = useAgentGithubIssues({
+    analysisSessionId,
+    selectedModel: models.isLoaded ? models.selectedModel : undefined,
   });
 
   // Preserve WorkspaceShell: fetch Drive status when a user is present.
@@ -188,10 +193,13 @@ export function WorkspaceV2() {
         canUpdateWiki={sadSave.canUpdateWiki}
         isSaving={sadSave.isSaving}
         isWikiBusy={sadSave.isWikiBusy}
+        isGithubPreparing={githubIssues.isPreparing}
         saveMessage={sadSave.saveMessage}
         wikiMessage={sadSave.wikiMessage}
+        githubSetupNotice={githubIssues.setupNotice}
         onSave={() => sadSave.save()}
         onUpdateWiki={() => sadSave.updateWiki()}
+        onPrepareGithubIssues={() => githubIssues.prepare(sadSave.previewId)}
         onRefine={() => sadSave.dismissPreview()}
       />
     ) : stage === "clarify" && qna.analysis ? (
@@ -243,8 +251,28 @@ export function WorkspaceV2() {
           isApproving={agent.isApproving}
           error={agent.error}
           onApprove={() => agent.approve()}
+          onPrepareGithubIssues={(previewId) => {
+            agent.close();
+            void githubIssues.prepare(previewId);
+          }}
+          isGithubPreparing={githubIssues.isPreparing}
+          githubSetupNotice={githubIssues.setupNotice}
           onContinueInChat={agent.close}
           onClose={agent.close}
+        />
+      ) : null}
+      {githubIssues.isOpen ? (
+        <AgentTimeline
+          mode="github"
+          events={githubIssues.events}
+          status={githubIssues.status}
+          result={githubIssues.result}
+          isStreaming={githubIssues.isPreparing}
+          isApproving={githubIssues.isApproving}
+          error={githubIssues.error}
+          onApprove={() => githubIssues.approve()}
+          onContinueInChat={githubIssues.close}
+          onClose={githubIssues.close}
         />
       ) : null}
     </>

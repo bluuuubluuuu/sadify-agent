@@ -114,6 +114,10 @@
   border: 1px solid var(--c-border);
   background: var(--c-muted);
 }
+.githubApproval {
+  background: #f8fafc;
+  border-color: #cbd5e1;
+}
 .approvalTitle {
   margin: 0 0 8px;
   display: flex;
@@ -164,6 +168,42 @@
   font-weight: var(--fw-bold);
   width: fit-content;
 }
+.githubRepo {
+  width: fit-content;
+  border: 1px solid var(--c-border);
+  border-radius: 8px;
+  background: var(--c-surface);
+  color: var(--c-primary);
+  font-size: 11px;
+  font-weight: var(--fw-bold);
+  padding: 4px 8px;
+  margin-bottom: 10px;
+}
+.githubIssueList {
+  list-style: none;
+  margin: 0 0 12px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.githubIssueList li {
+  border: 1px solid var(--c-border);
+  border-radius: 8px;
+  background: var(--c-surface);
+  padding: 9px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.githubIssueList strong {
+  font-size: var(--fs-sec);
+  color: var(--c-fg);
+}
+.githubIssueList small {
+  font-size: 11px;
+  color: var(--c-subtle);
+}
 .doneBlock {
   margin-top: 16px;
   padding: 14px;
@@ -179,6 +219,18 @@
   font-size: var(--fs-sec);
   font-weight: var(--fw-bold);
   color: var(--c-success);
+}
+.githubDone {
+  background: #f8fafc;
+}
+.githubSetup {
+  margin: 10px 0;
+  border-radius: 8px;
+  border: 1px solid #fde68a;
+  background: var(--c-warn-bg, #fef3c7);
+  color: var(--c-warn-fg, #92400e);
+  padding: 8px 10px;
+  font-size: 12px;
 }
 .bar {
   display: flex;

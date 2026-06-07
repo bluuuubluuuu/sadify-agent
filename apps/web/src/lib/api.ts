@@ -383,11 +383,20 @@ export type AgentEvent = {
   reasoning: string | null;
 };
 
+export type AgentGithubIssue = {
+  title: string;
+  body: string;
+  labels?: string[];
+};
+
 export type AgentProposedAction = {
   id: string;
   label: string;
   preview_id?: string;
   changed_files?: string[];
+  repo?: string;
+  issue_count?: number;
+  issues?: AgentGithubIssue[];
 };
 
 export type AgentFinalizeStatus =
@@ -906,6 +915,62 @@ export async function approveAgentActions(
     const detail = await readBackendErrorDetail(
       response,
       "SADify agent could not run the approved save yet.",
+    );
+    throw new BackendApiError(detail.message, detail.code, response.status);
+  }
+
+  return response.json();
+}
+
+export async function prepareAgentGithubIssues(input: {
+  analysisSessionId: string;
+  previewId: string;
+  model?: string;
+}): Promise<AgentFinalizeApiResponse> {
+  const response = await fetch(`${baseUrl}/agent/github/issues/prepare`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      analysis_session_id: input.analysisSessionId,
+      preview_id: input.previewId,
+      model: input.model ?? null,
+    }),
+  });
+
+  if (!response.ok) {
+    const detail = await readBackendErrorDetail(
+      response,
+      "SADify agent could not prepare GitHub issues yet.",
+    );
+    throw new BackendApiError(detail.message, detail.code, response.status);
+  }
+
+  return response.json();
+}
+
+export async function approveAgentGithubIssues(
+  input: { analysisSessionId: string; approvalId: string; model?: string },
+  idToken: string,
+): Promise<AgentFinalizeApiResponse> {
+  const response = await fetch(`${baseUrl}/agent/github/issues/approve`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${idToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      analysis_session_id: input.analysisSessionId,
+      approval_id: input.approvalId,
+      model: input.model ?? null,
+    }),
+  });
+
+  if (!response.ok) {
+    const detail = await readBackendErrorDetail(
+      response,
+      "SADify agent could not create GitHub issues yet.",
     );
     throw new BackendApiError(detail.message, detail.code, response.status);
   }
