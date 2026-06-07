@@ -89,7 +89,12 @@ export function WorkspaceV2() {
   const agent = useAgentFinalize({
     analysisSessionId,
     selectedModel: models.isLoaded ? models.selectedModel : undefined,
-    onSaved: () => setHistoryRefreshKey((key) => key + 1),
+    onSaved: (savedSad) => {
+      setHistoryRefreshKey((key) => key + 1);
+      if (savedSad) {
+        sadSave.adoptAgentSave(savedSad);
+      }
+    },
   });
   const githubIssues = useAgentGithubIssues({
     analysisSessionId,
@@ -251,12 +256,7 @@ export function WorkspaceV2() {
           isApproving={agent.isApproving}
           error={agent.error}
           onApprove={() => agent.approve()}
-          onPrepareGithubIssues={(previewId) => {
-            agent.close();
-            void githubIssues.prepare(previewId);
-          }}
-          isGithubPreparing={githubIssues.isPreparing}
-          githubSetupNotice={githubIssues.setupNotice}
+          onViewSavedSad={agent.close}
           onContinueInChat={agent.close}
           onClose={agent.close}
         />

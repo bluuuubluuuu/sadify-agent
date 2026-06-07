@@ -11,7 +11,9 @@ import {
   type CreateProjectResponse,
   type RequirementAnalysisApiResponse,
   type SadPreviewApiResponse,
+  type SadPreviewResponse,
   type SadSaveApiResponse,
+  type SadSaveRecord,
   type WikiPreviewResponse,
   type WikiUpdateResponse,
 } from "../api";
@@ -19,6 +21,13 @@ import { getFirebaseAuth } from "../firebaseClient";
 import { isGoogleOAuthConfigured } from "../googleOAuth";
 
 type PendingProjectAction = "save" | "wiki" | null;
+
+export type AdoptedAgentSave = {
+  previewId: string;
+  preview: SadPreviewResponse;
+  record: SadSaveRecord;
+  wiki?: WikiUpdateResponse | null;
+};
 
 function expectedRemoteHashes(response: WikiPreviewResponse): Record<string, string | null> {
   return Object.fromEntries(response.files.map((file) => [file.name, file.remote_hash]));
@@ -280,10 +289,32 @@ export function useSadSave({
     setWikiMessage("");
   }
 
+  function adoptAgentSave(saved: AdoptedAgentSave) {
+    setPreviewResponse({
+      preview_id: saved.previewId,
+      saved: true,
+      preview: saved.preview,
+    });
+    setSaveResponse({
+      saved: true,
+      record: saved.record,
+      message: "SAD preview saved by the agent.",
+    });
+    setWikiPreviewResponse(null);
+    setWikiUpdateResponse(saved.wiki ?? null);
+    setWikiDialogOpen(false);
+    setProjectDialogOpen(false);
+    setPendingProjectAction(null);
+    setMessage(`Agent finalized SAD preview ${saved.previewId}.`);
+    setSaveMessage("Saved to project repo.");
+    setWikiMessage(saved.wiki ? "Wiki updated." : "");
+  }
+
   const canUpdateWiki = Boolean(saveResponse) && isGoogleOAuthConfigured();
 
   return {
     dismissPreview,
+    adoptAgentSave,
     preview: previewResponse?.preview ?? null,
     previewId: previewResponse?.preview_id ?? null,
     hasPreview: Boolean(previewResponse),

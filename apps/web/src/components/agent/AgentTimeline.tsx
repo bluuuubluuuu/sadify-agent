@@ -72,9 +72,7 @@ export function AgentTimeline({
   isApproving,
   error,
   onApprove,
-  onPrepareGithubIssues,
-  isGithubPreparing = false,
-  githubSetupNotice = "",
+  onViewSavedSad,
   onContinueInChat,
   onClose,
 }: {
@@ -86,9 +84,7 @@ export function AgentTimeline({
   isApproving: boolean;
   error: string;
   onApprove: () => void;
-  onPrepareGithubIssues?: (previewId: string) => void;
-  isGithubPreparing?: boolean;
-  githubSetupNotice?: string;
+  onViewSavedSad?: () => void;
   onContinueInChat: () => void;
   onClose: () => void;
 }) {
@@ -99,7 +95,7 @@ export function AgentTimeline({
   const githubIssues = githubAction?.issues ?? [];
   const repo = githubAction?.repo ?? result?.repo ?? "configured repo";
   const issueCount = githubAction?.issue_count ?? githubIssues.length;
-  const agentSavedPreviewId = _savedPreviewId(result);
+  const savedSadIsVisible = Boolean(_savedAction(result));
 
   return (
     <div
@@ -230,6 +226,15 @@ export function AgentTimeline({
               <Button variant="ghost" onClick={onClose}>
                 Not now
               </Button>
+              {result.completed_actions && result.completed_actions.length && onViewSavedSad ? (
+                <Button
+                  variant="secondary"
+                  leftIcon={<Icon name="fileText" size={16} />}
+                  onClick={onViewSavedSad}
+                >
+                  View SAD preview
+                </Button>
+              ) : null}
             </div>
           </div>
         ) : null}
@@ -334,23 +339,16 @@ export function AgentTimeline({
                 );
               })}
             </ul>
-            {agentSavedPreviewId && onPrepareGithubIssues ? (
-              <>
-                {githubSetupNotice ? (
-                  <div className={styles.githubSetup}>{githubSetupNotice}</div>
-                ) : null}
-                <div className={styles.bar}>
-                  <Button
-                    variant="secondary"
-                    loading={isGithubPreparing}
-                    disabled={Boolean(githubSetupNotice)}
-                    leftIcon={<Icon name="openExternal" size={16} />}
-                    onClick={() => onPrepareGithubIssues(agentSavedPreviewId)}
-                  >
-                    Prepare GitHub issues
-                  </Button>
-                </div>
-              </>
+            {savedSadIsVisible && onViewSavedSad ? (
+              <div className={styles.bar}>
+                <Button
+                  variant="primary"
+                  leftIcon={<Icon name="fileText" size={16} color="#fff" />}
+                  onClick={onViewSavedSad}
+                >
+                  View SAD preview
+                </Button>
+              </div>
             ) : null}
           </div>
         ) : null}
@@ -359,15 +357,11 @@ export function AgentTimeline({
   );
 }
 
-function _savedPreviewId(result: AgentResult | null): string | null {
-  const direct = result?.preview_id;
-  if (direct) {
-    return direct;
-  }
-  const actions = result?.actions ?? result?.completed_actions ?? [];
+function _savedAction(result: AgentResult | null): Record<string, unknown> | null {
+  const actions = [...(result?.actions ?? []), ...(result?.completed_actions ?? [])];
   for (const action of actions) {
-    if (action.tool === "save_to_drive" && typeof action.preview_id === "string") {
-      return action.preview_id;
+    if (action.tool === "save_to_drive") {
+      return action;
     }
   }
   return null;

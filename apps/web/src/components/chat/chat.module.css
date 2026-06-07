@@ -203,6 +203,10 @@
 }
 .optionsReveal {
   animation: optionsRevealIn var(--motion-mid) var(--ease-out);
+  /* Bound the answer options so they scroll inside their own region instead of
+     pushing the composer/send bar off-screen on a short or resized pane. */
+  max-height: 30vh;
+  overflow-y: auto;
 }
 @keyframes optionsRevealIn {
   from {
@@ -264,6 +268,9 @@
 .chipLabel {
   flex: 1;
   min-width: 0;
+  /* Break long slash/slash-joined tokens (e.g. "payment/cancellation") so the
+     choice text wraps instead of being clipped at the card edge. */
+  overflow-wrap: anywhere;
 }
 .chip:hover {
   border-color: var(--c-secondary);

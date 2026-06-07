@@ -342,6 +342,16 @@ def run_approved_actions(
             }
 
         if response.get("status") == "error":
+            error_result = {
+                "approval_id": approval_id,
+                "proposed_actions": approval.actions,
+                "error": {
+                    "code": response.get("code"),
+                    "message": response.get("message"),
+                },
+            }
+            if results:
+                error_result["completed_actions"] = results
             return {
                 "status": "awaiting_approval",
                 "events": [
@@ -353,14 +363,7 @@ def run_approved_actions(
                         ),
                     }
                 ],
-                "result": {
-                    "approval_id": approval_id,
-                    "proposed_actions": approval.actions,
-                    "error": {
-                        "code": response.get("code"),
-                        "message": response.get("message"),
-                    },
-                },
+                "result": error_result,
             }
         results.append({"tool": action_id, **response})
 

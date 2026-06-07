@@ -262,6 +262,43 @@ def test_agent_generate_sad_consumes_regenerate_review_once_with_feedback():
     assert "do NOT invent it" in second_context
 
 
+def test_agent_tools_return_json_safe_preview_and_save_record_for_preview_hydration():
+    approval = WriteApproval(
+        approval_id="AP-HYDRATE",
+        actions=[
+            {
+                "id": "save_to_drive",
+                "label": "Save SAD to Google Drive",
+                "preview_id": "SP-000001",
+            }
+        ],
+    )
+
+    def fake_save_runner(**kwargs):
+        return FakeSaveRecord(
+            save_id="SV-HYDRATE",
+            preview_id=kwargs["request"].preview_id,
+        )
+
+    deps, analysis_repository, _preview_repository, _analysis_model, _preview_model = (
+        _finalize_deps(
+            write_approval=approval,
+            sad_save_runner=fake_save_runner,
+        )
+    )
+    record = _save_ready_analysis(analysis_repository)
+    tool_functions = build_agent_tool_functions(deps)
+
+    generated = tool_functions.generate_sad(record.analysis_id)
+    saved = tool_functions.save_to_drive(generated["preview_id"])
+
+    assert generated["preview"]["title"] == VALID_PREVIEW["title"]
+    assert saved["record"]["save_id"] == "SV-HYDRATE"
+    assert saved["record"]["sad_doc"]["url"] == "https://docs.example/SV-HYDRATE"
+    json.dumps(generated)
+    json.dumps(saved)
+
+
 def test_run_finalize_tighten_existing_draft_does_not_redraw_and_awaits_approval():
     deps, analysis_repository, _preview_repository, _analysis_model, preview_model = (
         _finalize_deps(
@@ -981,6 +1018,74 @@ def test_agent_approve_route_requires_auth_and_passes_approval(monkeypatch):
     assert captured["deps"].user.uid == "firebase-uid-001"
 
 
+def test_run_approved_actions_preserves_saved_sad_when_later_action_errors():
+    store = ApprovalStore()
+    approval_id = store.create(
+        "session-001",
+        [
+            {
+                "id": "save_to_drive",
+                "label": "Save SAD to Google Drive",
+                "preview_id": "SP-000001",
+            },
+            {
+                "id": "update_wiki",
+                "label": "Update project wiki",
+                "preview_id": "SP-000001",
+            },
+        ],
+    )
+
+    def fake_save_runner(**kwargs):
+        return FakeSaveRecord(
+            save_id="SV-000001",
+            preview_id=kwargs["request"].preview_id,
+        )
+
+    def fake_wiki_update_runner(**_kwargs):
+        raise WikiFlowError(
+            503,
+            "WIKI_LIVE_MODE_DISABLED",
+            "Live wiki updates are disabled for this process.",
+        )
+
+    deps, *_ = _finalize_deps(
+        sad_save_runner=fake_save_runner,
+        wiki_context_builder=lambda _deps: object(),
+        wiki_update_runner=fake_wiki_update_runner,
+    )
+
+    result = run_approved_actions(
+        deps,
+        analysis_session_id="session-001",
+        approval_store=store,
+        approval_id=approval_id,
+    )
+
+    assert result["status"] == "awaiting_approval"
+    assert result["result"]["error"] == {
+        "code": "WIKI_LIVE_MODE_DISABLED",
+        "message": "Live wiki updates are disabled for this process.",
+    }
+    completed = result["result"]["completed_actions"]
+    assert completed[0] == {
+        "tool": "save_to_drive",
+        "status": "saved",
+        "save_id": "SV-000001",
+        "preview_id": "SP-000001",
+        "doc_url": "https://docs.example/SV-000001",
+        "doc_path": "SAD/SV-000001",
+        "record": {
+            "save_id": "SV-000001",
+            "preview_id": "SP-000001",
+            "sad_doc": {
+                "url": "https://docs.example/SV-000001",
+                "path": "SAD/SV-000001",
+            },
+        },
+    }
+
+
 def test_stream_finalize_events_yields_ordered_events_then_terminal():
     deps, analysis_repository, _preview_repository, _analysis_model, _preview_model = (
         _finalize_deps(preview_outputs=[_preview_payload()])
@@ -1254,12 +1359,27 @@ class FakeArtifact:
         self.url = f"https://docs.example/{save_id}"
         self.path = f"SAD/{save_id}"
 
+    def model_dump(self, *, mode: str = "python") -> dict[str, str]:
+        del mode
+        return {
+            "url": self.url,
+            "path": self.path,
+        }
+
 
 class FakeSaveRecord:
     def __init__(self, *, save_id: str, preview_id: str) -> None:
         self.save_id = save_id
         self.preview_id = preview_id
         self.sad_doc = FakeArtifact(save_id)
+
+    def model_dump(self, *, mode: str = "python") -> dict[str, object]:
+        del mode
+        return {
+            "save_id": self.save_id,
+            "preview_id": self.preview_id,
+            "sad_doc": self.sad_doc.model_dump(mode="json"),
+        }
 
 
 class FakeWikiUpdateResponse:

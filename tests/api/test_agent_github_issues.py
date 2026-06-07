@@ -15,6 +15,7 @@ from sadify_api.schemas import SadPreviewResponse
 from sadify_api.services.analysis_state import RequirementAnalysisRepository
 from sadify_api.services.github_issue_flow import (
     GitHubIssueFlowError,
+    _call_tool_payload,
     approve_github_issues,
     build_github_mcp_toolset,
     prepare_github_issues,
@@ -24,6 +25,38 @@ from sadify_api.services.sad_preview import SadPreviewRepository
 from tests.api.test_gemini_structured import FakeRequirementAnalysisModel
 from tests.api.test_sad_preview import FakeSadPreviewModel, VALID_PREVIEW
 from tests.api.test_sad_save import AcceptingTokenVerifier
+
+
+class _FakeMcpResult:
+    def __init__(self, *, structuredContent=None, content=None, isError=False):
+        self.structuredContent = structuredContent
+        self.content = content or []
+        self.isError = isError
+
+
+class _FakeTextContent:
+    def __init__(self, text):
+        self.text = text
+
+
+def test_call_tool_payload_unwraps_fastmcp_result_envelope():
+    inner = {"status": "created", "repo": "owner/repo", "issues": []}
+    result = _FakeMcpResult(structuredContent={"result": inner})
+
+    assert _call_tool_payload(result) == inner
+
+
+def test_call_tool_payload_surfaces_real_mcp_error_text():
+    result = _FakeMcpResult(
+        content=[_FakeTextContent("Error executing tool: 404 Not Found")],
+        isError=True,
+    )
+
+    payload = _call_tool_payload(result)
+
+    assert payload["status"] == "error"
+    assert payload["code"] == "GITHUB_MCP_ERROR"
+    assert "404 Not Found" in payload["message"]
 
 
 def test_build_github_mcp_toolset_uses_stdio_server_with_approval_mode():

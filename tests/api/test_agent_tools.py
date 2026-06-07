@@ -303,7 +303,7 @@ def test_extract_dev_tasks_rejects_ungrounded_model_tasks():
     assert result == {
         "status": "error",
         "code": "DEV_TASKS_UNGROUNDED",
-        "message": "Developer task has no valid source references: Invent loyalty points",
+        "message": "No developer tasks could be grounded to SAD source references.",
     }
 
 
@@ -350,13 +350,18 @@ def test_write_tool_accepts_matching_approval_and_runs_injected_save():
 
     result = tool_functions.save_to_drive("SP-000001")
 
-    assert result == {
+    assert {
+        key: result[key]
+        for key in ("status", "save_id", "preview_id", "doc_url", "doc_path")
+    } == {
         "status": "saved",
         "save_id": "SV-AGENT",
         "preview_id": "SP-000001",
         "doc_url": "https://docs.example/SV-AGENT",
         "doc_path": "SAD/SV-AGENT",
     }
+    assert result["record"]["save_id"] == "SV-AGENT"
+    assert result["record"]["sad_doc"]["url"] == "https://docs.example/SV-AGENT"
     assert len(calls) == 1
 
 
@@ -460,7 +465,7 @@ def test_agent_wiki_update_resolves_live_drive_services_without_injected_deps(
 
     result = tool_functions.update_wiki(False)
 
-    assert result == {"status": "updated", "file_count": 2}
+    assert result == {"status": "updated", "file_count": 2, "wiki": {}}
     assert contexts[0].access_token == "access-token"
     assert contexts[0].drive_client.__class__.__name__ == "FakeDriveClient"
 

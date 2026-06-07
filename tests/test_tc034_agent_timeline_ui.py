@@ -97,7 +97,9 @@ def test_workspace_wires_agent_finalize_overlay():
     assert "onApprove={() => agent.approve()}" in workspace
     assert "onContinueInChat={agent.close}" in workspace
     # Agent save refreshes save history like the manual save does.
-    assert "onSaved: () => setHistoryRefreshKey" in workspace
+    assert "onSaved: (savedSad)" in workspace
+    assert "setHistoryRefreshKey((key) => key + 1)" in workspace
+    assert "sadSave.adoptAgentSave(savedSad)" in workspace
     # Additive: the manual save flow is untouched.
     assert "onSave={() => sadSave.save()}" in workspace
     assert "onFinalizeWithAgent?: () => void" not in preview

@@ -50,6 +50,10 @@ def test_agent_timeline_renders_distinct_github_approval_and_results():
     assert "GitHub issues created" in timeline
     assert "Open issue" in timeline
     assert "githubIssueList" in timeline
+    assert "View SAD preview" in timeline
+    assert "onViewSavedSad" in timeline
+    assert "View developer handoff" not in timeline
+    assert "Open the developer handoff panel to prepare GitHub issues" not in timeline
     assert ".githubIssueList" in css
     assert ".githubRepo" in css
     # The GitHub branch must not borrow the Drive/wiki save wording.
@@ -74,20 +78,37 @@ def test_preview_pane_exposes_post_save_github_cta_and_setup_notice():
     assert ".setupNotice" in css
 
 
-def test_workspace_wires_separate_github_issue_flow():
+def test_workspace_hydrates_agent_saved_sad_into_preview_pane():
     workspace = (WEB_SRC / "components" / "WorkspaceV2.tsx").read_text(
+        encoding="utf-8"
+    )
+    readiness = (WEB_SRC / "components" / "chat" / "ReadinessPane.tsx").read_text(
+        encoding="utf-8"
+    )
+    sad_save_hook = (WEB_SRC / "lib" / "hooks" / "useSadSave.ts").read_text(
         encoding="utf-8"
     )
 
     assert "useAgentGithubIssues" in workspace
     assert "const githubIssues = useAgentGithubIssues" in workspace
+    assert "AgentHandoffPane" not in workspace
+    assert "agent.savedPreviewId" not in workspace
+    assert "adoptAgentSave" in sad_save_hook
+    assert "onSaved: (savedSad)" in workspace
+    assert "sadSave.adoptAgentSave(savedSad)" in workspace
+    assert "PreviewPane" in workspace
     assert "onPrepareGithubIssues={() => githubIssues.prepare(sadSave.previewId)}" in workspace
     assert 'mode="github"' in workspace
     assert "onApprove={() => githubIssues.approve()}" in workspace
     assert "githubIssues.setupNotice" in workspace
+    assert "export function AgentHandoffPane" not in readiness
+    assert "SAD saved by agent" not in readiness
+    assert "Developer handoff is ready" not in readiness
     # GitHub approval stays out of the Drive/wiki finalizer hook.
     finalize_hook = (WEB_SRC / "lib" / "hooks" / "useAgentFinalize.ts").read_text(
         encoding="utf-8"
     )
     assert "/agent/github/issues/approve" not in finalize_hook
     assert "approveAgentGithubIssues" not in finalize_hook
+    assert "savedSad" in finalize_hook
+    assert "completed_actions" in finalize_hook

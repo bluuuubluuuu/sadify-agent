@@ -490,7 +490,14 @@ def _github_token() -> str | None:
 def _call_tool_payload(result: Any) -> dict[str, Any]:
     structured = getattr(result, "structuredContent", None)
     if isinstance(structured, dict):
+        # FastMCP wraps a bare dict return under {"result": {...}} to fit the
+        # generated object schema; unwrap it back to the tool's own payload.
+        if list(structured.keys()) == ["result"] and isinstance(
+            structured["result"], dict
+        ):
+            return structured["result"]
         return structured
+    text_chunks: list[str] = []
     for item in getattr(result, "content", []) or []:
         text = getattr(item, "text", None)
         if not text:
@@ -498,13 +505,22 @@ def _call_tool_payload(result: Any) -> dict[str, Any]:
         try:
             payload = json.loads(text)
         except json.JSONDecodeError:
+            text_chunks.append(text)
             continue
         if isinstance(payload, dict):
             return payload
+    # Surface the real MCP failure (tool exception, bad repo/PAT) instead of a
+    # generic message — failures must be visible and explained plainly.
+    detail = " ".join(chunk.strip() for chunk in text_chunks if chunk.strip())
+    is_error = bool(getattr(result, "isError", False))
     return {
         "status": "error",
-        "code": "GITHUB_MCP_RESPONSE_INVALID",
-        "message": "GitHub MCP server returned an unexpected response.",
+        "code": "GITHUB_MCP_ERROR" if is_error else "GITHUB_MCP_RESPONSE_INVALID",
+        "message": (
+            f"GitHub MCP error: {detail}"
+            if detail
+            else "GitHub MCP server returned an unexpected response."
+        ),
     }
 
 

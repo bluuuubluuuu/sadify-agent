@@ -9,6 +9,10 @@ class DevTaskGroundingError(Exception):
     pass
 
 
+MAX_DEV_TASKS = 8
+_PRIORITY_ORDER = {"high": 0, "medium": 1, "low": 2}
+
+
 def extract_dev_tasks(
     *,
     preview: SadPreviewResponse,
@@ -33,11 +37,24 @@ def validate_dev_tasks(
     for task in tasks:
         refs = [ref for ref in task.source_references if ref in allowed_refs]
         if not refs:
-            raise DevTaskGroundingError(
-                f"Developer task has no valid source references: {task.title}"
-            )
+            # Drop an individual ungrounded task instead of failing the whole
+            # batch — only grounded tasks become issues (no fabrication).
+            continue
         validated.append(task.model_copy(update={"source_references": refs}))
+    if not validated:
+        raise DevTaskGroundingError(
+            "No developer tasks could be grounded to SAD source references."
+        )
+    if len(validated) > MAX_DEV_TASKS:
+        # Keep the highest-priority tasks so the UI/approval payload stays
+        # demo-sized and reviewable; stable sort preserves order within a tier.
+        validated = sorted(validated, key=_priority_rank)[:MAX_DEV_TASKS]
     return validated
+
+
+def _priority_rank(task: DevTask) -> int:
+    priority = task.priority.lower() if isinstance(task.priority, str) else ""
+    return _PRIORITY_ORDER.get(priority, 1)
 
 
 def _allowed_source_references(preview: SadPreviewResponse) -> set[str]:

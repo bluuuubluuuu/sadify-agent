@@ -18,6 +18,9 @@
   max-height: 88vh;
   display: flex;
   flex-direction: column;
+  /* Scroll the whole modal so a long approval block can never push the
+     approve/decline bar below the fold and out of reach. */
+  overflow-y: auto;
 }
 .head {
   display: flex;
@@ -142,6 +145,10 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
+  /* Bound a long proposed-issue list so the approve/decline buttons below stay
+     visible without scrolling past every item. */
+  max-height: 34vh;
+  overflow-y: auto;
 }
 .actionItem {
   display: flex;
@@ -186,6 +193,10 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
+  /* Bound the issue list so it scrolls inside its own region instead of
+     pushing the approve bar past the bottom of the modal. */
+  max-height: 34vh;
+  overflow-y: auto;
 }
 .githubIssueList li {
   border: 1px solid var(--c-border);
@@ -235,6 +246,15 @@
 .bar {
   display: flex;
   gap: 10px;
+}
+/* Keep the GitHub approve/decline bar pinned to the bottom of the scrollable
+   modal so it stays visible no matter how long the issue list is. */
+.githubApproval .bar {
+  position: sticky;
+  bottom: 0;
+  background: #f8fafc;
+  padding-top: 10px;
+  margin-top: 2px;
 }
 .clarify {
   margin-top: 16px;

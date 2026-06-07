@@ -253,6 +253,7 @@ def build_agent_tool_functions(deps: AgentDeps) -> AgentToolFunctions:
         preview = preview_record.preview
         payload = {
             "preview_id": preview_record.preview_id,
+            "preview": _json_safe_model_dump(preview),
             "sections": [section.model_dump() for section in preview.sections],
             "assumptions": list(preview.assumptions),
             "open_questions": list(preview.open_questions),
@@ -394,6 +395,7 @@ def build_agent_tool_functions(deps: AgentDeps) -> AgentToolFunctions:
             "preview_id": record.preview_id,
             "doc_url": record.sad_doc.url,
             "doc_path": record.sad_doc.path,
+            "record": _json_safe_model_dump(record),
         }
 
     def update_wiki(force_overwrite: bool = False) -> ToolPayload:
@@ -443,6 +445,9 @@ def build_agent_tool_functions(deps: AgentDeps) -> AgentToolFunctions:
         return {
             "status": "updated",
             "file_count": len(response.files),
+            # Full JSON-safe wiki record so the UI can show the same "Wiki
+            # updated" confirmation panel as the manual update path.
+            "wiki": _json_safe_model_dump(response),
         }
 
     return AgentToolFunctions(
@@ -535,6 +540,30 @@ def _compact_text(value: str, *, limit: int = 420) -> str:
     if len(compact) <= limit:
         return compact
     return f"{compact[: limit - 3].rstrip()}..."
+
+
+def _json_safe_model_dump(value: Any) -> dict[str, Any]:
+    dumped = _json_safe(value)
+    return dumped if isinstance(dumped, dict) else {}
+
+
+def _json_safe(value: Any) -> Any:
+    dump = getattr(value, "model_dump", None)
+    if callable(dump):
+        return dump(mode="json")
+    if isinstance(value, dict):
+        return {str(key): _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(item) for item in value]
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    if hasattr(value, "__dict__"):
+        return {
+            key: _json_safe(item)
+            for key, item in vars(value).items()
+            if not key.startswith("_")
+        }
+    return str(value)
 
 
 def _require_write_approval(

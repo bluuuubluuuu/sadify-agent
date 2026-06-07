@@ -62,6 +62,64 @@ def test_validate_dev_tasks_keeps_only_known_source_refs():
     ]
 
 
+def test_validate_dev_tasks_drops_ungrounded_task_but_keeps_grounded():
+    preview = SadPreviewResponse.model_validate(VALID_PREVIEW)
+    tasks = [
+        DevTask(
+            priority="high",
+            title="Define detailed system architecture",
+            description="Generic task the model could not ground.",
+            source_references=[],
+        ),
+        DevTask(
+            priority="high",
+            title="Build order intake",
+            description="Capture the order details described in the SAD.",
+            source_references=["SRC-000001"],
+        ),
+    ]
+
+    validated = validate_dev_tasks(tasks, preview)
+
+    assert [t.title for t in validated] == ["Build order intake"]
+
+
+def test_validate_dev_tasks_caps_to_eight_highest_priority():
+    preview = SadPreviewResponse.model_validate(VALID_PREVIEW)
+    tasks = (
+        [
+            DevTask(
+                priority="low",
+                title=f"Low task {i}",
+                description="Grounded low task.",
+                source_references=["SRC-000001"],
+            )
+            for i in range(15)
+        ]
+        + [
+            DevTask(
+                priority="high",
+                title=f"High task {i}",
+                description="Grounded high task.",
+                source_references=["SRC-000001"],
+            )
+            for i in range(4)
+        ]
+    )
+
+    validated = validate_dev_tasks(tasks, preview)
+
+    assert len(validated) == 8
+    # All four high-priority tasks survive the cap.
+    assert sum(1 for t in validated if t.priority == "high") == 4
+    assert [t.title for t in validated if t.priority == "high"] == [
+        "High task 0",
+        "High task 1",
+        "High task 2",
+        "High task 3",
+    ]
+
+
 def test_extract_dev_tasks_calls_model_and_validates_grounding():
     preview = SadPreviewResponse.model_validate(VALID_PREVIEW)
     model = FakeDevTaskModel(
