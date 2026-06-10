@@ -33,6 +33,30 @@ pip install -r requirements-dev.txt
 .\.venv\Scripts\streamlit.exe run src/sadify/app.py
 ```
 
+## MVP Web Worktree
+
+The Next.js/FastAPI MVP track is in:
+
+```text
+D:\GoogleCloudHack\.worktrees\mvp-monorepo-scaffold
+```
+
+Backend dev server:
+
+```cmd
+cd /d D:\GoogleCloudHack\.worktrees\mvp-monorepo-scaffold
+set "PYTHONPATH=services\api\src;src;."
+D:\GoogleCloudHack\.venv\Scripts\uvicorn.exe sadify_api.main:app --host 0.0.0.0 --port 8000
+```
+
+Frontend dev server:
+
+```cmd
+cd /d D:\GoogleCloudHack\.worktrees\mvp-monorepo-scaffold\apps\web
+set "NEXT_PUBLIC_SADIFY_API_BASE_URL=http://localhost:8000"
+npm run dev
+```
+
 ## ADK Agent
 
 The ADK-compatible agent entrypoint lives in:

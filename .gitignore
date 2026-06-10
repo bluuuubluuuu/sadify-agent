@@ -9,6 +9,9 @@
 .env.*
 !.env.example
 *.local
+.secrets/
+.superpowers/
+.uiframes/
 
 # Python
 __pycache__/
