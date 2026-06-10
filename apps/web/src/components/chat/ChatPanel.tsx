@@ -29,6 +29,7 @@ export function ChatPanel({
   generating,
   onGenerate,
   onFinalizeWithAgent,
+  actionsDisabled = false,
   banner,
 }: {
   qna: QnA;
@@ -42,6 +43,8 @@ export function ChatPanel({
   generating?: boolean;
   onGenerate: () => void;
   onFinalizeWithAgent?: () => void;
+  // Disable the draft CTAs once a SAD already exists (re-enabled by "Refine in chat").
+  actionsDisabled?: boolean;
   banner?: ReactNode;
 }) {
   const fileRef = useRef<HTMLInputElement>(null);
@@ -132,6 +135,7 @@ export function ChatPanel({
             {onFinalizeWithAgent ? (
               <Button
                 variant="primary"
+                disabled={actionsDisabled}
                 leftIcon={<Icon name="sparkle" size={16} color="#fff" />}
                 onClick={onFinalizeWithAgent}
               >
@@ -140,6 +144,7 @@ export function ChatPanel({
             ) : null}
             <Button
               variant={onFinalizeWithAgent ? "secondary" : "primary"}
+              disabled={actionsDisabled}
               leftIcon={
                 <Icon
                   name="arrowRight"

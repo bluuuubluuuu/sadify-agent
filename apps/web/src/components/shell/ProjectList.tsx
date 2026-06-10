@@ -58,11 +58,11 @@ export function ProjectList({
                 href={projectRepoUrl(project.drive_folder_id)}
                 target="_blank"
                 rel="noreferrer"
-                aria-label={`Open project repo for ${project.name}`}
-                title={`Open project repo for ${project.name}`}
+                aria-label={`Open Drive folder for ${project.name}`}
+                title={`Open Drive folder for ${project.name}`}
               >
                 <Icon name="openExternal" size={13} color="#bfdbfe" />
-                <span>Repo</span>
+                <span>Drive</span>
               </a>
               {project.github_repo ? (
                 <a

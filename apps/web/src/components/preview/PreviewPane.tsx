@@ -20,6 +20,7 @@ export function PreviewPane({
   isSaving,
   isWikiBusy,
   isGithubPreparing = false,
+  githubLinked = false,
   saveMessage,
   wikiMessage,
   githubSetupNotice = "",
@@ -36,6 +37,7 @@ export function PreviewPane({
   isSaving: boolean;
   isWikiBusy: boolean;
   isGithubPreparing?: boolean;
+  githubLinked?: boolean;
   saveMessage: string;
   wikiMessage: string;
   githubSetupNotice?: string;
@@ -123,11 +125,23 @@ export function PreviewPane({
         ) : null}
 
         {Boolean(record) && onPrepareGithubIssues ? (
-          <div className={styles.githubHandoff}>
-            <Icon name="openExternal" size={18} color="var(--c-primary)" />
+          <div
+            className={`${styles.githubHandoff} ${
+              githubLinked ? styles.githubHandoffLinked : ""
+            }`}
+          >
+            <Icon
+              name={githubLinked ? "checkCircle" : "openExternal"}
+              size={18}
+              color={githubLinked ? "var(--c-success)" : "var(--c-primary)"}
+            />
             <span>
               <b>Developer handoff</b>
-              <span>Create source-grounded GitHub issues from this approved SAD.</span>
+              <span>
+                {githubLinked
+                  ? "GitHub repo linked — create source-grounded issues from this SAD."
+                  : "Create source-grounded GitHub issues from this approved SAD."}
+              </span>
             </span>
             <Button
               variant="secondary"

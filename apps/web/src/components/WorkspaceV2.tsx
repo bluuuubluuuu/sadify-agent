@@ -218,6 +218,7 @@ export function WorkspaceV2() {
       generating={sadSave.generating}
       onGenerate={() => sadSave.generate()}
       onFinalizeWithAgent={() => agent.finalize()}
+      actionsDisabled={sadSave.hasPreview}
       banner={
         !connected ? <ConnectDriveBanner onConnect={() => driveActions.connect()} /> : undefined
       }
@@ -253,6 +254,7 @@ export function WorkspaceV2() {
         isSaving={sadSave.isSaving}
         isWikiBusy={sadSave.isWikiBusy}
         isGithubPreparing={githubIssues.isPreparing}
+        githubLinked={Boolean(activeGithubRepo)}
         saveMessage={sadSave.saveMessage}
         wikiMessage={sadSave.wikiMessage}
         githubSetupNotice={githubIssues.setupNotice}
