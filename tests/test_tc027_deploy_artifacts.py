@@ -47,10 +47,21 @@ def test_backend_dockerfile_installs_api_runtime_libs_not_streamlit():
     for dep in ('"uvicorn', '"fastapi', '"pypdf', '"python-docx', '"openpyxl',
                 '"google-cloud-firestore', '"google-cloud-secret-manager',
                 '"google-adk', '"google-genai', '"firebase-admin',
-                '"python-multipart'):
+                '"python-multipart',
+                # MCP server (TC-034 GitHub path) needs mcp + httpx in the image.
+                '"mcp', '"httpx'):
         assert dep in dockerfile
     assert '"streamlit' not in dockerfile
     assert '"pandas' not in dockerfile
+
+
+def test_backend_dockerfile_bundles_mcp_server_for_subprocess():
+    # The agent spawns `python -m services.mcp.github_server` as a stdio
+    # subprocess; the image must contain that package and put /app on the path.
+    dockerfile = _read("Dockerfile")
+    assert "COPY services/mcp/" in dockerfile
+    assert "services.mcp.github_server" in dockerfile or "/app/src:/app" in dockerfile
+    assert (ROOT / "services" / "mcp" / "github_server.py").exists()
 
 
 def test_backend_dockerfile_uses_explicit_copy_not_whole_context():

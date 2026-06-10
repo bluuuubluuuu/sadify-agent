@@ -88,7 +88,7 @@ def test_project_list_opens_project_repo_separately_from_save_doc_links():
 
     assert "projectRepoUrl" in project_list
     assert "project.drive_folder_id" in project_list
-    assert "Open project repo" in project_list
+    assert "Open Drive folder" in project_list
     assert "https://drive.google.com/drive/folders/" in project_list
     assert "save.doc_url" in save_history
     assert "Open SAD doc" in save_history

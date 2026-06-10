@@ -27,13 +27,20 @@ RUN pip install --no-cache-dir \
     "pydantic>=2.13.0" \
     "pypdf>=6.10.0" \
     "python-docx>=1.2.0" \
-    "openpyxl>=3.1.0"
+    "openpyxl>=3.1.0" \
+    "mcp>=1.20.0,<2" \
+    "httpx>=0.27,<1"
 
 # Source trees (run via PYTHONPATH, same as the local dev/test setup).
+# services/mcp is the stdio MCP server the agent spawns as a subprocess
+# (python -m services.mcp.github_server) for the TC-034 GitHub-issues path.
 COPY services/api/src/ ./services/api/src/
+COPY services/mcp/ ./services/mcp/
 COPY src/ ./src/
 
-ENV PYTHONPATH="/app/services/api/src:/app/src" \
+# /app is on the path so `python -m services.mcp.github_server` resolves the
+# MCP server package in the subprocess (it also runs with cwd=/app).
+ENV PYTHONPATH="/app/services/api/src:/app/src:/app" \
     PYTHONUNBUFFERED=1
 
 # Cloud Run injects PORT (default 8080). Factory app, ADC credentials.
