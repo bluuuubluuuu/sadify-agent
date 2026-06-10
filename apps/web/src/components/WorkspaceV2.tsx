@@ -4,6 +4,7 @@ import { onAuthStateChanged } from "firebase/auth";
 import { useEffect, useRef, useState } from "react";
 import {
   getDriveRepoStatus,
+  setProjectGithubRepo,
   type CreateProjectResponse,
   type DriveRepoRecord,
   type ModelCatalogResponse,
@@ -30,6 +31,7 @@ import { ReadinessPane, PreviewPlaceholder } from "./chat/ReadinessPane";
 import { PreviewPane } from "./preview/PreviewPane";
 import { WikiDialog } from "./preview/WikiDialog";
 import { AgentTimeline } from "./agent/AgentTimeline";
+import { ConnectGithubModal } from "./agent/ConnectGithubModal";
 import { AttachChips } from "./chat/AttachChips";
 import { AutoTextarea } from "./ui/AutoTextarea";
 import { Button } from "./ui/Button";
@@ -100,6 +102,58 @@ export function WorkspaceV2() {
     analysisSessionId,
     selectedModel: models.isLoaded ? models.selectedModel : undefined,
   });
+  const [githubConnectOpen, setGithubConnectOpen] = useState(false);
+  const [githubConnectBusy, setGithubConnectBusy] = useState(false);
+  const [githubConnectError, setGithubConnectError] = useState("");
+
+  const activeProject =
+    driveRepo?.available_projects.find(
+      (project) => project.project_id === driveRepo?.active_project_id,
+    ) ?? null;
+  const activeGithubRepo = activeProject?.github_repo ?? null;
+
+  function handlePrepareGithubIssues() {
+    if (activeGithubRepo && githubIssues.hasToken) {
+      githubIssues.prepare(sadSave.previewId, activeGithubRepo);
+      return;
+    }
+    setGithubConnectError("");
+    setGithubConnectOpen(true);
+  }
+
+  async function handleGithubConnect(token: string, repo: string) {
+    const projectId = driveRepo?.active_project_id;
+    const user = getFirebaseAuth().currentUser;
+    if (!projectId || !user) {
+      setGithubConnectError("Connect a project and sign in before linking GitHub.");
+      return;
+    }
+    setGithubConnectBusy(true);
+    setGithubConnectError("");
+    try {
+      const idToken = await user.getIdToken();
+      const updated = await setProjectGithubRepo(idToken, projectId, repo);
+      setDriveRepo((current) =>
+        current
+          ? {
+              ...current,
+              available_projects: current.available_projects.map((project) =>
+                project.project_id === updated.project_id ? updated : project,
+              ),
+            }
+          : current,
+      );
+      githubIssues.setGithubToken(token);
+      setGithubConnectOpen(false);
+      githubIssues.prepare(sadSave.previewId, updated.github_repo);
+    } catch (caught) {
+      setGithubConnectError(
+        caught instanceof Error ? caught.message : "Could not link the GitHub repository.",
+      );
+    } finally {
+      setGithubConnectBusy(false);
+    }
+  }
 
   // Preserve WorkspaceShell: fetch Drive status when a user is present.
   useEffect(() => {
@@ -204,7 +258,7 @@ export function WorkspaceV2() {
         githubSetupNotice={githubIssues.setupNotice}
         onSave={() => sadSave.save()}
         onUpdateWiki={() => sadSave.updateWiki()}
-        onPrepareGithubIssues={() => githubIssues.prepare(sadSave.previewId)}
+        onPrepareGithubIssues={handlePrepareGithubIssues}
         onRefine={() => sadSave.dismissPreview()}
       />
     ) : stage === "clarify" && qna.analysis ? (
@@ -259,6 +313,15 @@ export function WorkspaceV2() {
           onViewSavedSad={agent.close}
           onContinueInChat={agent.close}
           onClose={agent.close}
+        />
+      ) : null}
+      {githubConnectOpen ? (
+        <ConnectGithubModal
+          initialRepo={activeGithubRepo}
+          busy={githubConnectBusy}
+          error={githubConnectError}
+          onSubmit={handleGithubConnect}
+          onClose={() => setGithubConnectOpen(false)}
         />
       ) : null}
       {githubIssues.isOpen ? (

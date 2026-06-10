@@ -22,7 +22,6 @@ type AgentGithubResult = {
 
 const SETUP_ERROR_CODES = new Set([
   "GITHUB_MCP_DISABLED",
-  "GITHUB_REPO_NOT_CONFIGURED",
   "DEV_TASKS_MODEL_UNAVAILABLE",
 ]);
 
@@ -41,8 +40,10 @@ export function useAgentGithubIssues({
   const [isApproving, setIsApproving] = useState(false);
   const [error, setError] = useState("");
   const [setupNotice, setSetupNotice] = useState("");
+  // Pasted PAT — held in memory only for this session, never persisted.
+  const [githubToken, setGithubToken] = useState("");
 
-  async function prepare(previewId: string | null) {
+  async function prepare(previewId: string | null, repo?: string | null) {
     if (!previewId) {
       setSetupNotice("Generate and save a SAD preview before preparing GitHub issues.");
       return;
@@ -54,6 +55,7 @@ export function useAgentGithubIssues({
       const response = await prepareAgentGithubIssues({
         analysisSessionId,
         previewId,
+        repo: repo ?? undefined,
         model: selectedModel,
       });
       setEvents(response.events);
@@ -90,7 +92,12 @@ export function useAgentGithubIssues({
     try {
       const idToken = await user.getIdToken();
       const response = await approveAgentGithubIssues(
-        { analysisSessionId, approvalId, model: selectedModel },
+        {
+          analysisSessionId,
+          approvalId,
+          githubToken: githubToken || undefined,
+          model: selectedModel,
+        },
         idToken,
       );
       setEvents((previous) => [...previous, ...response.events]);
@@ -122,6 +129,9 @@ export function useAgentGithubIssues({
     isApproving,
     error,
     setupNotice,
+    githubToken,
+    setGithubToken,
+    hasToken: githubToken.trim().length > 0,
     prepare,
     approve,
     close,

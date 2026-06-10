@@ -154,6 +154,7 @@ def create_agent_router(
                 approval_id=request.approval_id,
                 approval_store=approval_store,
                 user=user,
+                github_token=request.github_token,
             )
         except GitHubIssueFlowError as exc:
             raise _github_http_error(exc) from exc

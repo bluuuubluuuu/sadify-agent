@@ -36,6 +36,23 @@ def test_create_project_assigns_pr_id_starting_at_one():
     assert project.project_id == "PR-000001"
     assert project.name == "Laundry Workflow"
     assert project.drive_folder_id == "folder-001"
+    assert project.github_repo is None
+
+
+def test_set_github_repo_persists_on_project():
+    repository = ProjectRepository()
+    repository.create_project(
+        grant_id="DG-000001",
+        name="Laundry Workflow",
+        drive_folder_id="folder-001",
+    )
+
+    updated = repository.set_github_repo("DG-000001", "PR-000001", "octocat/laundry")
+
+    assert updated is not None
+    assert updated.github_repo == "octocat/laundry"
+    assert repository.get_project("DG-000001", "PR-000001").github_repo == "octocat/laundry"
+    assert repository.set_github_repo("DG-000001", "PR-MISSING", "octocat/x") is None
 
 
 def test_create_project_increments_id_per_grant():

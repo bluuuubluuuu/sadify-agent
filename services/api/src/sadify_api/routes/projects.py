@@ -7,7 +7,9 @@ from sadify_api.schemas import (
     CreateProjectResponse,
     ProjectListResponse,
     ProjectSavesResponse,
+    ProjectSummary,
     SadSaveSummary,
+    SetProjectGithubRequest,
     SwitchProjectRequest,
     SwitchProjectResponse,
 )
@@ -18,7 +20,11 @@ from sadify_api.services.drive_client import (
     DriveTokenInvalidError,
 )
 from sadify_api.services.drive_repo import DriveRepoRepository
-from sadify_api.services.projects import ProjectRepository, validate_project_name
+from sadify_api.services.projects import (
+    ProjectRepository,
+    validate_github_repo,
+    validate_project_name,
+)
 from sadify_api.services.sad_save import SadSaveRepository
 from sadify_api.services.secret_store import SecretStore, get_secret_store
 
@@ -171,6 +177,40 @@ def create_projects_router(
                 for record in records
             ],
         )
+
+    @router.post("/{project_id}/github", response_model=ProjectSummary)
+    def link_github_repo(
+        project_id: str,
+        request: SetProjectGithubRequest,
+        authorization: str | None = Header(default=None),
+    ) -> ProjectSummary:
+        user = _verified_user(authorization, token_verifier)
+        repo = _active_repo_or_error(drive_repo_repository, user.uid)
+        project = project_repository.get_project(repo.grant_id, project_id)
+        if project is None:
+            raise _project_error(
+                404,
+                "PROJECT_NOT_FOUND",
+                "Project not found in this Drive repo.",
+            )
+        try:
+            github_repo = validate_github_repo(request.repo)
+        except ValueError as exc:
+            raise _project_error(
+                422,
+                "GITHUB_REPO_INVALID",
+                "Enter your repository as owner/name (e.g. octocat/hello-world).",
+            ) from exc
+        updated = project_repository.set_github_repo(
+            repo.grant_id, project.project_id, github_repo
+        )
+        if updated is None:
+            raise _project_error(
+                404,
+                "PROJECT_NOT_FOUND",
+                "Project not found in this Drive repo.",
+            )
+        return updated
 
     @router.post("/switch", response_model=SwitchProjectResponse)
     def switch_project(

@@ -29,6 +29,7 @@ from sadify_api.config import ApiConfig
 from sadify_api.schemas import AuthenticatedUser, DevTask
 from sadify_api.services.dev_tasks import DevTaskGroundingError, extract_dev_tasks
 from sadify_api.services.gemini_structured import DevTaskExtractionModel
+from sadify_api.services.projects import validate_github_repo
 from sadify_api.services.sad_preview import SadPreviewRepository
 
 
@@ -247,12 +248,12 @@ def approve_github_issues(
     approval_id: str,
     approval_store: ApprovalStore,
     user: AuthenticatedUser | None = None,
+    github_token: str | None = None,
     token_provider: Callable[[], str | None] | None = None,
     mcp_executor: GitHubMcpExecutor | None = None,
     mcp_toolset_factory: McpToolsetFactory | None = None,
 ) -> dict[str, Any]:
     del user
-    target_repo = _target_repo(config, None)
     approval = approval_store.get(analysis_session_id, approval_id)
     if approval is None:
         raise GitHubIssueFlowError(
@@ -261,13 +262,9 @@ def approve_github_issues(
             "Approval token is missing, invalid, or already used.",
         )
     action = _github_issue_action_from_approval(approval.actions)
-    repo = str(action.get("repo") or "")
-    if _normalize_repo(repo) != _normalize_repo(target_repo):
-        raise GitHubIssueFlowError(
-            409,
-            "GITHUB_REPO_NOT_ALLOWED",
-            f"This flow is configured only for repo {target_repo}.",
-        )
+    # The repo was locked into the approval at prepare time (user-chosen or the
+    # operator default); re-validate + enabled-check it here.
+    target_repo = _target_repo(config, str(action.get("repo") or ""))
     issues = action.get("issues")
     if not isinstance(issues, list) or not issues:
         raise GitHubIssueFlowError(
@@ -275,12 +272,15 @@ def approve_github_issues(
             "GITHUB_ISSUES_PAYLOAD_INVALID",
             "Approved GitHub issue payload is missing.",
         )
-    token = (token_provider or _github_token)()
+    if token_provider is not None:
+        token = token_provider()
+    else:
+        token = (github_token or "").strip() or _github_token()
     if not token:
         raise GitHubIssueFlowError(
             503,
             "GITHUB_TOKEN_MISSING",
-            f"Set {GITHUB_TOKEN_ENV} before creating GitHub issues.",
+            "Paste your GitHub token to create issues.",
         )
 
     factory = mcp_toolset_factory or _default_mcp_toolset_factory(target_repo)
@@ -379,18 +379,24 @@ def _target_repo(config: ApiConfig, requested_repo: str | None) -> str:
             "GITHUB_MCP_DISABLED",
             "GitHub issue creation is disabled for this process.",
         )
+    requested = (requested_repo or "").strip()
+    if requested:
+        # Per-user: the caller supplies their own owner/repo. Validate the format;
+        # the user's token already scopes which repos can actually be written.
+        try:
+            return validate_github_repo(requested)
+        except ValueError as exc:
+            raise GitHubIssueFlowError(
+                422,
+                "GITHUB_REPO_INVALID",
+                "Enter your repository as owner/name (e.g. octocat/hello-world).",
+            ) from exc
     configured = (config.github_repo or "").strip()
     if not configured:
         raise GitHubIssueFlowError(
             503,
             "GITHUB_REPO_NOT_CONFIGURED",
-            "Set SADIFY_GITHUB_REPO before creating GitHub issues.",
-        )
-    if requested_repo and _normalize_repo(requested_repo) != _normalize_repo(configured):
-        raise GitHubIssueFlowError(
-            409,
-            "GITHUB_REPO_NOT_ALLOWED",
-            f"This flow is configured only for repo {configured}.",
+            "Connect your GitHub repository before creating issues.",
         )
     return configured
 

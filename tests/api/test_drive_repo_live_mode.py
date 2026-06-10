@@ -183,6 +183,7 @@ def test_live_connect_returns_available_projects_synced_from_drive():
             "name": "Project A",
             "drive_folder_id": "project-folder-001",
             "created_at": "2026-05-28T10:00:00Z",
+            "github_repo": None,
         }
     ]
     assert drive_client.listed_parent_folder_id == "drive-folder-001"

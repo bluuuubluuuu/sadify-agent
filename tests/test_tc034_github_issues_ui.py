@@ -31,7 +31,12 @@ def test_github_issue_hook_prepares_then_approves_with_firebase_auth():
     assert "status === 401 || error.status === 403" in hook
     assert "Sign in with Google before creating GitHub issues." in hook
     assert "GITHUB_MCP_DISABLED" in hook
-    assert "GITHUB_REPO_NOT_CONFIGURED" in hook
+    # Per-user: the repo is supplied by the user, no longer a setup blocker.
+    assert "GITHUB_REPO_NOT_CONFIGURED" not in hook
+    # Pasted PAT held in memory and sent on approve; repo sent on prepare.
+    assert "setGithubToken" in hook
+    assert "githubToken: githubToken || undefined" in hook
+    assert "repo?: string | null" in hook
     assert "setSetupNotice" in hook
     assert "setIsPreparing(true)" in hook
 
@@ -78,6 +83,34 @@ def test_preview_pane_exposes_post_save_github_cta_and_setup_notice():
     assert ".setupNotice" in css
 
 
+def test_connect_github_modal_collects_token_repo_with_instructions():
+    modal = (WEB_SRC / "components" / "agent" / "ConnectGithubModal.tsx").read_text(
+        encoding="utf-8"
+    )
+
+    assert "Connect GitHub" in modal
+    # Token + repo inputs.
+    assert 'type="password"' in modal
+    assert "owner/name" in modal
+    # Inline create-PAT instructions + Issues permission guidance.
+    assert "fine-grained personal access token" in modal
+    assert "Issues: Read and write" in modal
+    # Honest session-only security copy.
+    assert "Stored only for this session, never saved" in modal
+    assert "onSubmit(token.trim(), repo.trim())" in modal
+
+
+def test_sidebar_shows_per_project_github_link():
+    project_list = (WEB_SRC / "components" / "shell" / "ProjectList.tsx").read_text(
+        encoding="utf-8"
+    )
+
+    assert "project.github_repo" in project_list
+    assert "projectGithubUrl" in project_list
+    assert "https://github.com/${repo}" in project_list
+    assert "<span>GitHub</span>" in project_list
+
+
 def test_workspace_hydrates_agent_saved_sad_into_preview_pane():
     workspace = (WEB_SRC / "components" / "WorkspaceV2.tsx").read_text(
         encoding="utf-8"
@@ -97,7 +130,10 @@ def test_workspace_hydrates_agent_saved_sad_into_preview_pane():
     assert "onSaved: (savedSad)" in workspace
     assert "sadSave.adoptAgentSave(savedSad)" in workspace
     assert "PreviewPane" in workspace
-    assert "onPrepareGithubIssues={() => githubIssues.prepare(sadSave.previewId)}" in workspace
+    # Per-user GitHub connect gates prepare via a modal + persists the repo.
+    assert "onPrepareGithubIssues={handlePrepareGithubIssues}" in workspace
+    assert "ConnectGithubModal" in workspace
+    assert "setProjectGithubRepo" in workspace
     assert 'mode="github"' in workspace
     assert "onApprove={() => githubIssues.approve()}" in workspace
     assert "githubIssues.setupNotice" in workspace

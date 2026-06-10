@@ -51,6 +51,10 @@ class ProjectRepositoryProtocol(Protocol):
 
     def next_counter(self, grant_id: str, project_id: str, counter_name: str) -> int: ...
 
+    def set_github_repo(
+        self, grant_id: str, project_id: str, repo: str
+    ) -> ProjectRecord | None: ...
+
 
 class ProjectRepository:
     def __init__(self) -> None:
@@ -145,6 +149,16 @@ class ProjectRepository:
         value = self._counters.get(key, 1)
         self._counters[key] = value + 1
         return value
+
+    def set_github_repo(
+        self, grant_id: str, project_id: str, repo: str
+    ) -> ProjectRecord | None:
+        record = self.get_project(grant_id, project_id)
+        if record is None:
+            return None
+        updated = record.model_copy(update={"github_repo": repo})
+        self._records[(grant_id, project_id)] = updated
+        return updated
 
     def _next_project_number(self, grant_id: str) -> int:
         value = self._next_project_number_by_grant.get(grant_id, 1)
@@ -289,6 +303,16 @@ class FirestoreProjectRepository:
             counter_name,
         )
 
+    def set_github_repo(
+        self, grant_id: str, project_id: str, repo: str
+    ) -> ProjectRecord | None:
+        ref = self._project_ref(grant_id, project_id)
+        data = snapshot_data(ref.get())
+        if data is None:
+            return None
+        ref.set({"github_repo": repo}, merge=True)
+        return _project_from_data({**data, "github_repo": repo})
+
     def _project_ref(self, grant_id: str, project_id: str):
         return self._client.collection("projects").document(
             self._project_doc_id(grant_id, project_id)
@@ -312,6 +336,13 @@ def validate_project_name(value: str) -> str:
     return clean
 
 
+def validate_github_repo(value: str) -> str:
+    clean = value.strip()
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", clean):
+        raise ValueError("invalid GitHub repo (expected owner/name)")
+    return clean
+
+
 def _normalize_name(value: str) -> str:
     return re.sub(r"\s+", " ", value.strip().lower())
 
@@ -327,6 +358,7 @@ def _project_from_data(data: dict) -> ProjectRecord:
             "name": data["name"],
             "drive_folder_id": data["drive_folder_id"],
             "created_at": data["created_at"],
+            "github_repo": data.get("github_repo"),
         }
     )
 

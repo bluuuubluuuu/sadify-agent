@@ -308,6 +308,7 @@ export type ProjectSummary = {
   name: string;
   drive_folder_id: string;
   created_at: string;
+  github_repo?: string | null;
 };
 
 export type ProjectListResponse = {
@@ -824,6 +825,34 @@ export async function switchProject(
   return response.json();
 }
 
+export async function setProjectGithubRepo(
+  idToken: string,
+  projectId: string,
+  repo: string,
+): Promise<ProjectSummary> {
+  const response = await fetch(
+    `${baseUrl}/projects/${encodeURIComponent(projectId)}/github`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${idToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ repo }),
+    },
+  );
+
+  if (!response.ok) {
+    const detail = await readBackendErrorDetail(
+      response,
+      "Could not link the GitHub repository.",
+    );
+    throw new BackendApiError(detail.message, detail.code, response.status);
+  }
+
+  return response.json();
+}
+
 export async function listProjectSaves(
   idToken: string,
   projectId: string,
@@ -925,6 +954,7 @@ export async function approveAgentActions(
 export async function prepareAgentGithubIssues(input: {
   analysisSessionId: string;
   previewId: string;
+  repo?: string;
   model?: string;
 }): Promise<AgentFinalizeApiResponse> {
   const response = await fetch(`${baseUrl}/agent/github/issues/prepare`, {
@@ -935,6 +965,7 @@ export async function prepareAgentGithubIssues(input: {
     body: JSON.stringify({
       analysis_session_id: input.analysisSessionId,
       preview_id: input.previewId,
+      repo: input.repo ?? null,
       model: input.model ?? null,
     }),
   });
@@ -951,7 +982,12 @@ export async function prepareAgentGithubIssues(input: {
 }
 
 export async function approveAgentGithubIssues(
-  input: { analysisSessionId: string; approvalId: string; model?: string },
+  input: {
+    analysisSessionId: string;
+    approvalId: string;
+    githubToken?: string;
+    model?: string;
+  },
   idToken: string,
 ): Promise<AgentFinalizeApiResponse> {
   const response = await fetch(`${baseUrl}/agent/github/issues/approve`, {
@@ -963,6 +999,7 @@ export async function approveAgentGithubIssues(
     body: JSON.stringify({
       analysis_session_id: input.analysisSessionId,
       approval_id: input.approvalId,
+      github_token: input.githubToken ?? null,
       model: input.model ?? null,
     }),
   });

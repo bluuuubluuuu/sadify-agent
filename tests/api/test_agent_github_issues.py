@@ -339,6 +339,86 @@ def test_approve_github_issues_consumes_valid_token_and_executes_same_mcp_tool()
     assert len(mcp_calls) == 1
 
 
+def _user_repo_approval(store: ApprovalStore) -> str:
+    return store.create(
+        "session-001",
+        [
+            {
+                "id": "create_github_issues",
+                "label": "Create GitHub issues",
+                "repo": "bluuuubluuuu/sadify_test",
+                "issue_count": 1,
+                "issues": [
+                    {"title": "Build intake", "body": "Body", "labels": ["sadify"]}
+                ],
+            }
+        ],
+    )
+
+
+def test_approve_github_issues_uses_pasted_token_and_user_repo():
+    store = ApprovalStore()
+    approval_id = _user_repo_approval(store)
+    mcp_calls = []
+
+    def fake_mcp_executor(*, repo, issues, token, mcp_toolset_factory):
+        mcp_calls.append({"repo": repo, "token": token})
+        return {
+            "status": "created",
+            "repo": repo,
+            "issues": [{"number": 1, "url": "u", "title": "Build intake"}],
+        }
+
+    # config has NO github_repo — the repo comes from the user's approval.
+    result = approve_github_issues(
+        config=ApiConfig(environment="test", github_mcp_enabled=True),
+        analysis_session_id="session-001",
+        approval_id=approval_id,
+        approval_store=store,
+        github_token="ghp_user_pasted",
+        mcp_executor=fake_mcp_executor,
+        mcp_toolset_factory=lambda **kwargs: {"ok": True},
+    )
+
+    assert result["status"] == "completed"
+    assert mcp_calls[0]["repo"] == "bluuuubluuuu/sadify_test"
+    assert mcp_calls[0]["token"] == "ghp_user_pasted"
+
+
+def test_approve_github_issues_without_token_refuses(monkeypatch):
+    monkeypatch.delenv("SADIFY_GITHUB_TOKEN", raising=False)
+    store = ApprovalStore()
+    approval_id = _user_repo_approval(store)
+
+    with pytest.raises(GitHubIssueFlowError) as exc_info:
+        approve_github_issues(
+            config=ApiConfig(environment="test", github_mcp_enabled=True),
+            analysis_session_id="session-001",
+            approval_id=approval_id,
+            approval_store=store,
+        )
+
+    assert exc_info.value.status_code == 503
+    assert exc_info.value.code == "GITHUB_TOKEN_MISSING"
+
+
+def test_prepare_github_issues_rejects_bad_repo_format():
+    with pytest.raises(GitHubIssueFlowError) as exc_info:
+        prepare_github_issues(
+            preview_repository=SadPreviewRepository(),
+            dev_task_model=None,
+            config=ApiConfig(environment="test", github_mcp_enabled=True),
+            analysis_session_id="session-001",
+            preview_id="SP-000001",
+            model="gemini-2.5-flash",
+            approval_store=ApprovalStore(),
+            repo="not-a-valid-repo",
+        )
+
+    assert exc_info.value.status_code == 422
+    assert exc_info.value.code == "GITHUB_REPO_INVALID"
+
+
 def test_approve_github_issues_invalid_token_refuses_before_mcp():
     mcp_calls = []
 

@@ -65,6 +65,8 @@ class AgentGitHubIssuesApproveRequest(ApiModel):
     analysis_session_id: str = Field(min_length=1)
     approval_id: str = Field(min_length=1)
     model: str | None = None
+    # User-pasted PAT; used once for the write, never persisted server-side.
+    github_token: str | None = None
 
 
 class AgentEvent(ApiModel):
@@ -547,6 +549,11 @@ class ProjectSummary(ApiModel):
     name: str
     drive_folder_id: str
     created_at: datetime
+    github_repo: str | None = None
+
+
+class SetProjectGithubRequest(ApiModel):
+    repo: str = Field(min_length=3, max_length=200)
 
 
 class CreateProjectRequest(ApiModel):

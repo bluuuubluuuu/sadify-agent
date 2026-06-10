@@ -9,6 +9,10 @@ function projectRepoUrl(folderId: string) {
   return `https://drive.google.com/drive/folders/${encodeURIComponent(folderId)}`;
 }
 
+function projectGithubUrl(repo: string) {
+  return `https://github.com/${repo}`;
+}
+
 export function ProjectList({
   projects,
   activeProjectId,
@@ -60,6 +64,19 @@ export function ProjectList({
                 <Icon name="openExternal" size={13} color="#bfdbfe" />
                 <span>Repo</span>
               </a>
+              {project.github_repo ? (
+                <a
+                  className={styles.projectRepoLink}
+                  href={projectGithubUrl(project.github_repo)}
+                  target="_blank"
+                  rel="noreferrer"
+                  aria-label={`Open GitHub repo ${project.github_repo}`}
+                  title={`GitHub: ${project.github_repo}`}
+                >
+                  <Icon name="openExternal" size={13} color="#bfdbfe" />
+                  <span>GitHub</span>
+                </a>
+              ) : null}
             </div>
             {isActive ? historyNode : null}
           </div>
