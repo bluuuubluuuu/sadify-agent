@@ -291,6 +291,17 @@ class RequirementAnalysisApiResponse(ApiModel):
     analysis: RequirementAnalysisResponse
 
 
+class ProjectSessionSnapshot(ApiModel):
+    clean_requirement_text: str
+    analysis_response: RequirementAnalysisApiResponse | None = None
+    answer_history: list[str] = Field(default_factory=list)
+    source_context: str = ""
+    source_references: list[str] = Field(default_factory=list)
+    selected_model: str | None = None
+    status: Literal["in_progress"] = "in_progress"
+    updated_at: datetime | None = None
+
+
 class ItReadinessCheck(ApiModel):
     id: str = Field(min_length=1)
     label: str = Field(min_length=1)
