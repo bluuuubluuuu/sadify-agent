@@ -411,6 +411,24 @@ export type AgentProposedAction = {
   issues?: AgentGithubIssue[];
 };
 
+export type GithubIssueCreationTotals = {
+  requested: number;
+  created: number;
+  skipped: number;
+};
+
+export type AgentGithubIssueResult = {
+  approval_id?: string;
+  save_id?: string;
+  preview_id?: string;
+  repo?: string;
+  proposed_actions?: AgentProposedAction[];
+  created_issues?: Array<Record<string, unknown>>;
+  skipped_issues?: Array<Record<string, unknown>>;
+  totals?: GithubIssueCreationTotals;
+  error?: { code?: string; message?: string };
+};
+
 export type AgentFinalizeStatus =
   | "asked_clarification"
   | "awaiting_approval"
@@ -1042,18 +1060,19 @@ export async function approveAgentActions(
 
 export async function prepareAgentGithubIssues(input: {
   analysisSessionId: string;
-  previewId: string;
+  saveId: string;
   repo?: string;
   model?: string;
-}): Promise<AgentFinalizeApiResponse> {
+}, idToken: string): Promise<AgentFinalizeApiResponse> {
   const response = await fetch(`${baseUrl}/agent/github/issues/prepare`, {
     method: "POST",
     headers: {
+      Authorization: `Bearer ${idToken}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
       analysis_session_id: input.analysisSessionId,
-      preview_id: input.previewId,
+      save_id: input.saveId,
       repo: input.repo ?? null,
       model: input.model ?? null,
     }),
@@ -1063,6 +1082,36 @@ export async function prepareAgentGithubIssues(input: {
     const detail = await readBackendErrorDetail(
       response,
       "SADify agent could not prepare GitHub issues yet.",
+    );
+    throw new BackendApiError(detail.message, detail.code, response.status);
+  }
+
+  return response.json();
+}
+
+export async function relaunchAgentGithubIssues(
+  input: {
+    analysisSessionId: string;
+    saveId: string;
+  },
+  idToken: string,
+): Promise<AgentFinalizeApiResponse> {
+  const response = await fetch(`${baseUrl}/agent/github/issues/relaunch`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${idToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      analysis_session_id: input.analysisSessionId,
+      save_id: input.saveId,
+    }),
+  });
+
+  if (!response.ok) {
+    const detail = await readBackendErrorDetail(
+      response,
+      "SADify agent could not relaunch GitHub issues yet.",
     );
     throw new BackendApiError(detail.message, detail.code, response.status);
   }
