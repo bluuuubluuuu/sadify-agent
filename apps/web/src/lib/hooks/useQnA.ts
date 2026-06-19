@@ -196,6 +196,19 @@ export function useQnA({
     setMessage("No project files are written by this step.");
   }
 
+  function hydrate(state: {
+    requirementText: string;
+    analysisResponse: RequirementAnalysisApiResponse | null;
+    answerHistory: string[];
+  }) {
+    setRequirementText(state.requirementText);
+    setCleanRequirementText(state.requirementText);
+    setAnalysisResponse(state.analysisResponse);
+    setAnswerHistory(state.answerHistory);
+    setSelectedChoiceIds([]);
+    setAmendmentText("");
+  }
+
   function toggleChoice(choiceId: string) {
     const choice = analysis?.next_question.choices.find(
       (candidate) => candidate.id === choiceId,
@@ -217,7 +230,9 @@ export function useQnA({
   return {
     requirementText,
     setRequirementText,
+    cleanRequirementText,
     analysisResponse,
+    answerHistory,
     analysis,
     questionnaire,
     isBusy,
@@ -234,6 +249,7 @@ export function useQnA({
     startAnalysis,
     continueWithAnswer,
     toggleChoice,
+    hydrate,
     reset,
   };
 }

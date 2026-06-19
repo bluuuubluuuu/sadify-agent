@@ -125,6 +125,17 @@ export type RequirementAnalysisApiResponse = {
   analysis: RequirementAnalysis;
 };
 
+export type ProjectSessionSnapshot = {
+  clean_requirement_text: string;
+  analysis_response: RequirementAnalysisApiResponse | null;
+  answer_history: string[];
+  source_context: string;
+  source_references: string[];
+  selected_model: string | null;
+  status: "in_progress";
+  updated_at?: string | null;
+};
+
 export type ItReadinessCheck = {
   id: string;
   label: string;
@@ -822,6 +833,59 @@ export async function switchProject(
     throw new BackendApiError(detail.message, detail.code, response.status);
   }
 
+  return response.json();
+}
+
+export async function putProjectSession(
+  idToken: string,
+  projectId: string,
+  snapshot: ProjectSessionSnapshot,
+): Promise<void> {
+  const response = await fetch(
+    `${baseUrl}/projects/${encodeURIComponent(projectId)}/session`,
+    {
+      method: "PUT",
+      headers: {
+        Authorization: `Bearer ${idToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(snapshot),
+    },
+  );
+
+  if (!response.ok) {
+    const detail = await readBackendErrorDetail(
+      response,
+      "Could not save this project session.",
+    );
+    throw new BackendApiError(detail.message, detail.code, response.status);
+  }
+}
+
+export async function getProjectSession(
+  idToken: string,
+  projectId: string,
+): Promise<ProjectSessionSnapshot | null> {
+  const response = await fetch(
+    `${baseUrl}/projects/${encodeURIComponent(projectId)}/session`,
+    {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${idToken}`,
+      },
+    },
+  );
+
+  if (response.status === 204) {
+    return null;
+  }
+  if (!response.ok) {
+    const detail = await readBackendErrorDetail(
+      response,
+      "Could not restore this project session.",
+    );
+    throw new BackendApiError(detail.message, detail.code, response.status);
+  }
   return response.json();
 }
 

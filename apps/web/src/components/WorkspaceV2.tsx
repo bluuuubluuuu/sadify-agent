@@ -8,6 +8,7 @@ import {
   type CreateProjectResponse,
   type DriveRepoRecord,
   type ModelCatalogResponse,
+  type ProjectSessionSnapshot,
   type SourceRecord,
 } from "../lib/api";
 import { getFirebaseAuth } from "../lib/firebaseClient";
@@ -19,8 +20,10 @@ import { useSources } from "../lib/hooks/useSources";
 import { useQnA } from "../lib/hooks/useQnA";
 import { useSadSave } from "../lib/hooks/useSadSave";
 import { useModelCatalog } from "../lib/hooks/useModelCatalog";
+import { useProjectSession } from "../lib/hooks/useProjectSession";
 import { useAgentFinalize } from "../lib/hooks/useAgentFinalize";
 import { useAgentGithubIssues } from "../lib/hooks/useAgentGithubIssues";
+import { shouldWriteSnapshot } from "../lib/sessionSnapshot";
 import { AppShell } from "./shell/AppShell";
 import { Sidebar } from "./shell/Sidebar";
 import { ConnectDriveBanner } from "./shell/ConnectDriveBanner";
@@ -49,13 +52,26 @@ export function WorkspaceV2() {
   const [historyRefreshKey, setHistoryRefreshKey] = useState(0);
   const [analysisSessionId, setAnalysisSessionId] = useState(() => crypto.randomUUID());
   const [startText, setStartText] = useState("");
+  const [restoredSourceContext, setRestoredSourceContext] = useState("");
+  const [restoredSourceReferences, setRestoredSourceReferences] = useState<string[]>([]);
+  const activeProjectRef = useRef<string | null>(null);
+  const restoringRef = useRef(false);
+  const pendingModelRef = useRef<string | null>(null);
 
   const models = useModelCatalog();
   const sources = useSources();
+  const session = useProjectSession();
   const driveActions = useDriveRepo(setDriveRepo);
+  const activeProjectId = driveRepo?.active_project_id ?? null;
+  const effectiveSourceContext = sources.files.length
+    ? sources.analysisContext
+    : restoredSourceContext;
+  const effectiveSourceReferences = sources.files.length
+    ? sources.sourceReferences
+    : restoredSourceReferences;
   const qna = useQnA({
-    sourceContext: sources.analysisContext,
-    sourceReferences: sources.sourceReferences,
+    sourceContext: effectiveSourceContext,
+    sourceReferences: effectiveSourceReferences,
     analysisSessionId,
     selectedModel: models.isLoaded ? models.selectedModel : undefined,
     onAnalysisSaved: () => {},
@@ -81,8 +97,8 @@ export function WorkspaceV2() {
   const sadSave = useSadSave({
     requirementText: qna.requirementText,
     analysisResponse: qna.analysisResponse,
-    sourceContext: sources.analysisContext,
-    sourceReferences: sources.sourceReferences,
+    sourceContext: effectiveSourceContext,
+    sourceReferences: effectiveSourceReferences,
     selectedModel: models.isLoaded ? models.selectedModel : undefined,
     onProjectCreated: handleProjectCreated,
     onHistoryRefresh: () => setHistoryRefreshKey((key) => key + 1),
@@ -179,6 +195,136 @@ export function WorkspaceV2() {
   useEffect(() => {
     setAnalysisSessionId(crypto.randomUUID());
   }, [sources.sourceReferences.join(","), driveRepo?.active_project_id]);
+
+  useEffect(() => {
+    session.cancel();
+    const previousProjectId = activeProjectRef.current;
+    activeProjectRef.current = activeProjectId;
+    pendingModelRef.current = null;
+    setRestoredSourceContext("");
+    setRestoredSourceReferences([]);
+
+    const switchedProjects =
+      previousProjectId !== null && previousProjectId !== activeProjectId;
+    if (switchedProjects) {
+      qna.reset();
+      sources.reset();
+      setStartText("");
+    }
+
+    if (!auth.isSignedIn || !activeProjectId) {
+      restoringRef.current = false;
+      return session.cancel;
+    }
+
+    restoringRef.current = true;
+    void session
+      .restore(activeProjectId)
+      .then((result) => {
+        if (result.projectId !== activeProjectRef.current) {
+          return;
+        }
+        const snapshot = result.snapshot;
+        if (!snapshot) {
+          return;
+        }
+        qna.hydrate({
+          requirementText: snapshot.clean_requirement_text,
+          analysisResponse: snapshot.analysis_response,
+          answerHistory: snapshot.answer_history,
+        });
+        setStartText(snapshot.clean_requirement_text);
+        setRestoredSourceContext(snapshot.source_context);
+        setRestoredSourceReferences(snapshot.source_references);
+
+        pendingModelRef.current = snapshot.selected_model;
+        if (
+          snapshot.selected_model &&
+          models.isLoaded &&
+          models.catalog.models.some((model) => model.id === snapshot.selected_model)
+        ) {
+          models.setSelectedModel(snapshot.selected_model);
+          pendingModelRef.current = null;
+        }
+      })
+      .catch((error) => {
+        if (activeProjectRef.current !== activeProjectId) {
+          return;
+        }
+        qna.reset();
+        setStartText("");
+        setRestoredSourceContext("");
+        setRestoredSourceReferences([]);
+        console.warn("Could not restore the project session snapshot.", error);
+      })
+      .finally(() => {
+        if (activeProjectRef.current === activeProjectId) {
+          restoringRef.current = false;
+        }
+      });
+
+    return session.cancel;
+  }, [activeProjectId, auth.isSignedIn]);
+
+  useEffect(() => {
+    const pendingModel = pendingModelRef.current;
+    if (!models.isLoaded || !pendingModel) {
+      return;
+    }
+    pendingModelRef.current = null;
+    if (models.catalog.models.some((model) => model.id === pendingModel)) {
+      models.setSelectedModel(pendingModel);
+    }
+  }, [models.catalog.models, models.isLoaded, models.setSelectedModel]);
+
+  useEffect(() => {
+    if (sources.files.length > 0) {
+      setRestoredSourceContext("");
+      setRestoredSourceReferences([]);
+    }
+  }, [sources.files.length]);
+
+  useEffect(() => {
+    const scheduledProjectId = activeProjectId;
+    if (
+      !shouldWriteSnapshot({
+        isSignedIn: auth.isSignedIn,
+        activeProjectId,
+        scheduledProjectId,
+        hasAnalysis: qna.analysisResponse !== null,
+        restoring: restoringRef.current,
+      }) ||
+      !scheduledProjectId ||
+      !qna.analysisResponse
+    ) {
+      return;
+    }
+
+    const snapshot: ProjectSessionSnapshot = {
+      clean_requirement_text: qna.cleanRequirementText,
+      analysis_response: qna.analysisResponse,
+      answer_history: qna.answerHistory,
+      source_context: effectiveSourceContext,
+      source_references: effectiveSourceReferences,
+      selected_model: models.selectedModel || null,
+      status: "in_progress",
+    };
+    session.writeDebounced(
+      scheduledProjectId,
+      snapshot,
+      (projectId) => projectId === activeProjectRef.current,
+    );
+    return session.cancel;
+  }, [
+    activeProjectId,
+    auth.isSignedIn,
+    effectiveSourceContext,
+    effectiveSourceReferences,
+    models.selectedModel,
+    qna.analysisResponse,
+    qna.answerHistory,
+    qna.cleanRequirementText,
+  ]);
 
   const readinessScore =
     qna.analysis?.questionnaire?.draft_readiness.score ?? qna.analysis?.readiness.score ?? 0;
