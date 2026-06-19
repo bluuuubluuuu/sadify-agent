@@ -48,6 +48,7 @@ export function ProjectList({
                 disabled={busy}
                 aria-current={isActive ? "true" : undefined}
                 onClick={() => onSwitch(project.project_id)}
+                title={project.name}
               >
                 <Icon name="folder" size={18} color="#fff" />
                 <span className={styles.projName}>{project.name}</span>
@@ -55,6 +56,20 @@ export function ProjectList({
                   <span className={styles.projCount}>{count} saves</span>
                 ) : null}
               </button>
+              {onDelete ? (
+                <button
+                  type="button"
+                  className="projectDeleteButton"
+                  disabled={busy}
+                  aria-label={`Delete project ${project.name}`}
+                  title={`Delete project ${project.name}`}
+                  onClick={() => onDelete(project.project_id)}
+                >
+                  <span aria-hidden="true">&#128465;</span>
+                </button>
+              ) : null}
+            </div>
+            <div className="projectRowActions">
               <a
                 className={styles.projectRepoLink}
                 href={projectRepoUrl(project.drive_folder_id)}
@@ -79,18 +94,6 @@ export function ProjectList({
                   <span>GitHub</span>
                 </a>
               ) : null}
-              {onDelete ? (
-                <button
-                  type="button"
-                  className="projectDeleteButton"
-                  disabled={busy}
-                  aria-label={`Delete project ${project.name}`}
-                  title={`Delete project ${project.name}`}
-                  onClick={() => onDelete(project.project_id)}
-                >
-                  <span aria-hidden="true">&#128465;</span>
-                </button>
-              ) : null}
             </div>
             {isActive ? historyNode : null}
           </div>
@@ -101,6 +104,12 @@ export function ProjectList({
         New project
       </button>
       <style jsx>{`
+        .projectRowActions {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          margin: 9px 0 5px 8px;
+        }
         .projectDeleteButton {
           width: 34px;
           min-width: 34px;
