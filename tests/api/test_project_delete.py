@@ -9,6 +9,8 @@ from sadify_api.config import ApiConfig
 from sadify_api.main import create_app
 from sadify_api.schemas import (
     DriveRepoConnectRequest,
+    GithubIssueDraft,
+    GithubIssueSet,
     ProjectSessionSnapshot,
     ProjectSummary,
 )
@@ -18,6 +20,7 @@ from sadify_api.services.drive_repo import (
     DriveRepoRepository,
     FirestoreDriveRepoRepository,
 )
+from sadify_api.services.github_issue_sets import GithubIssueSetRepository
 from sadify_api.services.projects import (
     FirestoreProjectRepository,
     ProjectRepository,
@@ -79,6 +82,18 @@ class FailOnceSadSaveRepository(SadSaveRepository):
         return super().delete_for_project(grant_id, project_id)
 
 
+class FailOnceGithubIssueSetRepository(GithubIssueSetRepository):
+    def __init__(self) -> None:
+        super().__init__()
+        self.fail_next_delete = False
+
+    def delete_for_project(self, grant_id: str, project_id: str) -> int:
+        if self.fail_next_delete:
+            self.fail_next_delete = False
+            raise RuntimeError("forced issue-set delete failure")
+        return super().delete_for_project(grant_id, project_id)
+
+
 @dataclass
 class DeleteFakes:
     grant_id: str
@@ -86,6 +101,8 @@ class DeleteFakes:
     drive_repo: DriveRepoRepository
     project_repo: ProjectRepository
     sad_save_repo: SadSaveRepository
+    issue_set_repo: GithubIssueSetRepository
+    save_id: str
     session_repo: SessionSnapshotRepository
     drive_service: RecordingDriveClient
 
@@ -95,10 +112,16 @@ def _seed_delete_client(
     live: bool,
     drive_failure: bool = False,
     fail_once: bool = False,
+    fail_issue_once: bool = False,
 ):
     drive_repo = DriveRepoRepository()
     project_repo = ProjectRepository()
     sad_save_repo = FailOnceSadSaveRepository() if fail_once else SadSaveRepository()
+    issue_set_repo = (
+        FailOnceGithubIssueSetRepository()
+        if fail_issue_once
+        else GithubIssueSetRepository()
+    )
     session_repo = SessionSnapshotRepository()
     drive_service = RecordingDriveClient(fail_trash=drive_failure)
     repo = drive_repo.connect_repo(
@@ -119,13 +142,33 @@ def _seed_delete_client(
     )
     active_repo = drive_repo.set_active_project(grant_id=repo.grant_id, project=project)
     preview = _save_preview(SadPreviewRepository())
-    sad_save_repo.save_preview(
+    saved = sad_save_repo.save_preview(
         owner_uid="firebase-uid-001",
         owner_email="owner@example.com",
         repo=active_repo,
         project_id=project.project_id,
         preview_record=preview,
         sources=[],
+    )
+    now = datetime.now(UTC)
+    issue_set_repo.create_if_absent(
+        GithubIssueSet(
+            grant_id=repo.grant_id,
+            project_id=project.project_id,
+            save_id=saved.save_id,
+            preview_id=saved.preview_id,
+            owner_uid="firebase-uid-001",
+            repo="octocat/bike-rental",
+            issues=[
+                GithubIssueDraft(
+                    marker=f"<!-- sadify-github-issue:{project.project_id}:{saved.save_id}:0 -->",
+                    title="Implement bike rental",
+                    body="Implement the saved workflow.",
+                )
+            ],
+            created_at=now,
+            updated_at=now,
+        )
     )
     session_repo.upsert(
         repo.grant_id,
@@ -146,6 +189,7 @@ def _seed_delete_client(
             project_repository=project_repo,
             sad_save_repository=sad_save_repo,
             session_snapshot_repository=session_repo,
+            github_issue_set_repository=issue_set_repo,
             drive_client=drive_service,
             secret_store=FakeSecretStore(),
         )
@@ -156,6 +200,8 @@ def _seed_delete_client(
         drive_repo=drive_repo,
         project_repo=project_repo,
         sad_save_repo=sad_save_repo,
+        issue_set_repo=issue_set_repo,
+        save_id=saved.save_id,
         session_repo=session_repo,
         drive_service=drive_service,
     )
@@ -182,6 +228,11 @@ def client_with_active_project():
     return _seed_delete_client(live=False, fail_once=True)
 
 
+@pytest.fixture
+def client_with_issue_delete_failure():
+    return _seed_delete_client(live=False, fail_issue_once=True)
+
+
 def test_delete_project_cascades_and_trashes_drive(client_with_saved_project):
     client, headers, project_id, fakes = client_with_saved_project
     response = client.delete(f"/projects/{project_id}", headers=headers)
@@ -194,6 +245,7 @@ def test_delete_project_cascades_and_trashes_drive(client_with_saved_project):
         project_id=project_id,
     ) == []
     assert fakes.session_repo.get(fakes.grant_id, project_id) is None
+    assert fakes.issue_set_repo.get(fakes.grant_id, project_id, fakes.save_id) is None
     assert fakes.drive_service.trashed_folder_ids == [fakes.drive_folder_id]
 
 
@@ -221,6 +273,7 @@ def test_delete_drive_failure_keeps_app_data(client_with_drive_failure):
         project_id=project_id,
     )
     assert fakes.session_repo.get(fakes.grant_id, project_id) is not None
+    assert fakes.issue_set_repo.get(fakes.grant_id, project_id, fakes.save_id) is not None
 
 
 def test_delete_persistence_failure_keeps_project_and_retry_succeeds(
@@ -232,6 +285,26 @@ def test_delete_persistence_failure_keeps_project_and_retry_succeeds(
     assert first.status_code == 502
     assert first.json()["detail"]["code"] == "PROJECT_DELETE_FAILED"
     assert fakes.project_repo.get_project(fakes.grant_id, project_id) is not None
+
+    second = client.delete(f"/projects/{project_id}", headers=headers)
+    assert second.status_code == 200
+    assert fakes.project_repo.get_project(fakes.grant_id, project_id) is None
+
+
+def test_delete_issue_set_failure_keeps_project_and_retry_succeeds(
+    client_with_issue_delete_failure,
+):
+    client, headers, project_id, fakes = client_with_issue_delete_failure
+    fakes.issue_set_repo.fail_next_delete = True
+
+    first = client.delete(f"/projects/{project_id}", headers=headers)
+
+    assert first.status_code == 502
+    assert first.json()["detail"]["code"] == "PROJECT_DELETE_FAILED"
+    assert fakes.project_repo.get_project(fakes.grant_id, project_id) is not None
+    assert fakes.issue_set_repo.get(
+        fakes.grant_id, project_id, fakes.save_id
+    ) is not None
 
     second = client.delete(f"/projects/{project_id}", headers=headers)
     assert second.status_code == 200

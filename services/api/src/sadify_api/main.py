@@ -36,6 +36,7 @@ from sadify_api.services.firestore_client import get_firestore_client
 from sadify_api.services.github_issue_sets import (
     FirestoreGithubIssueSetRepository,
     GithubIssueSetRepository,
+    GithubIssueSetRepositoryProtocol,
 )
 from sadify_api.services.sad_preview import SadPreviewRepository
 from sadify_api.services.sad_save import FirestoreSadSaveRepository, SadSaveRepository
@@ -70,7 +71,7 @@ def create_app(
     wiki_state_repository: WikiStateRepository | None = None,
     project_repository: ProjectRepository | None = None,
     session_snapshot_repository: SessionSnapshotRepository | None = None,
-    github_issue_set_repository: GithubIssueSetRepository | None = None,
+    github_issue_set_repository: GithubIssueSetRepositoryProtocol | None = None,
 ) -> FastAPI:
     config = config or load_api_config()
     firestore_client = None
@@ -169,6 +170,7 @@ def create_app(
             drive_client,
             secret_store,
             session_snapshot_repository,
+            github_issue_set_repository,
         )
     )
     app.include_router(

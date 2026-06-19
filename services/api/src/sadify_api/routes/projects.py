@@ -23,6 +23,10 @@ from sadify_api.services.drive_client import (
     DriveTokenInvalidError,
 )
 from sadify_api.services.drive_repo import DriveRepoRepository
+from sadify_api.services.github_issue_sets import (
+    GithubIssueSetRepository,
+    GithubIssueSetRepositoryProtocol,
+)
 from sadify_api.services.projects import (
     ProjectRepository,
     validate_github_repo,
@@ -42,10 +46,14 @@ def create_projects_router(
     drive_client: DriveClient | None = None,
     secret_store: SecretStore | None = None,
     session_snapshot_repository: SessionSnapshotRepository | None = None,
+    github_issue_set_repository: GithubIssueSetRepositoryProtocol | None = None,
 ) -> APIRouter:
     config = config or load_api_config()
     session_snapshot_repository = (
         session_snapshot_repository or SessionSnapshotRepository()
+    )
+    github_issue_set_repository = (
+        github_issue_set_repository or GithubIssueSetRepository()
     )
     router = APIRouter(prefix="/projects", tags=["projects"])
 
@@ -164,6 +172,13 @@ def create_projects_router(
             grant_id=repo.grant_id,
             project_id=project.project_id,
         )
+        prepared_save_ids = {
+            issue_set.save_id
+            for issue_set in github_issue_set_repository.list_for_project(
+                repo.grant_id,
+                project.project_id,
+            )
+        }
         return ProjectSavesResponse(
             project_id=project.project_id,
             project_name=project.name,
@@ -181,6 +196,7 @@ def create_projects_router(
                         if artifact.source_ids
                     ],
                     created_at=record.created_at,
+                    has_github_issue_set=record.save_id in prepared_save_ids,
                 )
                 for record in records
             ],
@@ -260,6 +276,7 @@ def create_projects_router(
         try:
             sad_save_repository.delete_for_project(repo.grant_id, project_id)
             session_snapshot_repository.delete(repo.grant_id, project_id)
+            github_issue_set_repository.delete_for_project(repo.grant_id, project_id)
             project_repository.delete_project(repo.grant_id, project_id)
         except Exception as exc:
             raise _project_error(

@@ -652,6 +652,7 @@ class SadSaveSummary(ApiModel):
     change_summary: str
     source_ids: list[str]
     created_at: datetime
+    has_github_issue_set: bool = False
 
 
 class ProjectSavesResponse(ApiModel):
