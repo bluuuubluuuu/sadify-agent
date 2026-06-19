@@ -11,6 +11,7 @@ import {
   type ModelCatalogResponse,
   type ProjectSessionSnapshot,
   type ProjectSummary,
+  type SadSaveSummary,
   type SourceRecord,
 } from "../lib/api";
 import { getFirebaseAuth } from "../lib/firebaseClient";
@@ -162,6 +163,7 @@ export function WorkspaceV2() {
   const [githubConnectOpen, setGithubConnectOpen] = useState(false);
   const [githubConnectBusy, setGithubConnectBusy] = useState(false);
   const [githubConnectError, setGithubConnectError] = useState("");
+  const [githubResumeRepo, setGithubResumeRepo] = useState<string | null>(null);
 
   const activeProject =
     driveRepo?.available_projects.find(
@@ -171,7 +173,7 @@ export function WorkspaceV2() {
 
   function handlePrepareGithubIssues() {
     if (activeGithubRepo && githubIssues.hasToken) {
-      githubIssues.prepare(sadSave.previewId, activeGithubRepo);
+      githubIssues.prepare(sadSave.record?.save_id ?? null, activeGithubRepo);
       return;
     }
     setGithubConnectError("");
@@ -179,6 +181,12 @@ export function WorkspaceV2() {
   }
 
   async function handleGithubConnect(token: string, repo: string) {
+    if (githubResumeRepo) {
+      githubIssues.setGithubToken(token);
+      setGithubConnectOpen(false);
+      setGithubResumeRepo(null);
+      return;
+    }
     const projectId = driveRepo?.active_project_id;
     const user = getFirebaseAuth().currentUser;
     if (!projectId || !user) {
@@ -202,13 +210,28 @@ export function WorkspaceV2() {
       );
       githubIssues.setGithubToken(token);
       setGithubConnectOpen(false);
-      githubIssues.prepare(sadSave.previewId, updated.github_repo);
+      githubIssues.prepare(sadSave.record?.save_id ?? null, updated.github_repo);
     } catch (caught) {
       setGithubConnectError(
         caught instanceof Error ? caught.message : "Could not link the GitHub repository.",
       );
     } finally {
       setGithubConnectBusy(false);
+    }
+  }
+
+  async function handleResumeGithubIssues(save: SadSaveSummary) {
+    const result = await githubIssues.relaunch(save.save_id);
+    const lockedRepo = result?.repo;
+    if (!lockedRepo) {
+      return;
+    }
+    if (!githubIssues.hasToken) {
+      setGithubResumeRepo(lockedRepo);
+      setGithubConnectError("");
+      setGithubConnectOpen(true);
+    } else {
+      setGithubResumeRepo(null);
     }
   }
 
@@ -397,6 +420,7 @@ export function WorkspaceV2() {
           setDeletingProject(project);
         }
       }}
+      onCreateGithubIssues={(save) => void handleResumeGithubIssues(save)}
       onSignIn={() => void auth.signIn().catch(() => undefined)}
       onSignOut={() => auth.signOut()}
     />
@@ -532,11 +556,15 @@ export function WorkspaceV2() {
       ) : null}
       {githubConnectOpen ? (
         <ConnectGithubModal
-          initialRepo={activeGithubRepo}
+          initialRepo={githubResumeRepo ?? activeGithubRepo}
+          repoLocked={Boolean(githubResumeRepo)}
           busy={githubConnectBusy}
           error={githubConnectError}
           onSubmit={handleGithubConnect}
-          onClose={() => setGithubConnectOpen(false)}
+          onClose={() => {
+            setGithubConnectOpen(false);
+            setGithubResumeRepo(null);
+          }}
         />
       ) : null}
       {githubIssues.isOpen ? (

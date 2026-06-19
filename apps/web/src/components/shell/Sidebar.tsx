@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import type { DriveRepoRecord } from "../../lib/api";
+import type { DriveRepoRecord, SadSaveSummary } from "../../lib/api";
 import { useDriveRepo } from "../../lib/hooks/useDriveRepo";
 import { useProjects } from "../../lib/hooks/useProjects";
 import { useSaveHistory } from "../../lib/hooks/useSaveHistory";
@@ -21,6 +21,7 @@ export function Sidebar({
   historyRefreshKey,
   onNewSad,
   onDeleteProject,
+  onCreateGithubIssues,
   onSignIn,
   onSignOut,
 }: {
@@ -31,6 +32,7 @@ export function Sidebar({
   historyRefreshKey: number;
   onNewSad: () => void;
   onDeleteProject: (projectId: string) => void;
+  onCreateGithubIssues: (save: SadSaveSummary) => void;
   onSignIn: () => void;
   onSignOut: () => void;
 }) {
@@ -70,7 +72,13 @@ export function Sidebar({
             onSwitch={(projectId) => projectsHook.switchTo(projectId)}
             onDelete={onDeleteProject}
             onNewProject={() => setDialogOpen(true)}
-            historyNode={<SaveHistory saves={history.saves} message={history.message} />}
+            historyNode={
+              <SaveHistory
+                saves={history.saves}
+                message={history.message}
+                onCreateGithubIssues={onCreateGithubIssues}
+              />
+            }
           />
         </>
       ) : null}

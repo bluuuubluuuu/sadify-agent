@@ -61,6 +61,13 @@ type AgentResult = {
   actions?: Array<Record<string, unknown>>;
   completed_actions?: Array<Record<string, unknown>>;
   issues?: CompletedGithubIssue[];
+  created_issues?: CompletedGithubIssue[];
+  skipped_issues?: CompletedGithubIssue[];
+  totals?: {
+    requested: number;
+    created: number;
+    skipped: number;
+  };
 };
 
 export function AgentTimeline({
@@ -96,6 +103,8 @@ export function AgentTimeline({
   const repo = githubAction?.repo ?? result?.repo ?? "configured repo";
   const issueCount = githubAction?.issue_count ?? githubIssues.length;
   const savedSadIsVisible = Boolean(_savedAction(result));
+  const totals = result?.totals;
+  const completedGithubIssues = result?.created_issues ?? result?.issues ?? [];
 
   return (
     <div
@@ -277,10 +286,12 @@ export function AgentTimeline({
           <div className={`${styles.doneBlock} ${styles.githubDone}`}>
             <p className={styles.doneTitle}>
               <Icon name="checkCircle" size={18} color="var(--c-success)" />
-              GitHub issues created
+              {totals
+                ? `${totals.created} created, ${totals.skipped} already existed`
+                : "GitHub issues created"}
             </p>
             <ul className={styles.actions}>
-              {(result?.issues ?? []).map((issue, index) => (
+              {completedGithubIssues.map((issue, index) => (
                 <li key={index} className={styles.actionItem}>
                   <Icon name="openExternal" size={16} color="var(--c-success)" />
                   <span className={styles.actionText}>
@@ -297,6 +308,12 @@ export function AgentTimeline({
                 </li>
               ))}
             </ul>
+            {totals && totals.skipped > 0 ? (
+              <p className={styles.savedNote}>
+                {totals.skipped} issue{totals.skipped === 1 ? " was" : "s were"} already
+                present and skipped.
+              </p>
+            ) : null}
           </div>
         ) : null}
 

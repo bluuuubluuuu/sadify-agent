@@ -17,12 +17,14 @@ export function ConnectGithubModal({
   initialRepo,
   busy,
   error,
+  repoLocked = false,
   onSubmit,
   onClose,
 }: {
   initialRepo?: string | null;
   busy?: boolean;
   error?: string;
+  repoLocked?: boolean;
   onSubmit: (token: string, repo: string) => void;
   onClose: () => void;
 }) {
@@ -46,8 +48,9 @@ export function ConnectGithubModal({
         </div>
         <h3 className={styles.title}>Connect GitHub</h3>
         <p className={styles.desc}>
-          Paste a GitHub token and your repository. The agent uses it to create
-          source-grounded issues from this SAD.
+          {repoLocked
+            ? "This prepared issue set is locked to its original repository. Enter a GitHub token to continue."
+            : "Paste a GitHub token and your repository. The agent uses it to create source-grounded issues from this SAD."}
         </p>
 
         <div className={styles.connectHelp}>
@@ -80,6 +83,7 @@ export function ConnectGithubModal({
             placeholder="octocat/hello-world"
             value={repo}
             onChange={(event) => setRepo(event.target.value)}
+            disabled={repoLocked}
             spellCheck={false}
             autoComplete="off"
           />
@@ -115,7 +119,7 @@ export function ConnectGithubModal({
             leftIcon={<Icon name="openExternal" size={16} color="#fff" />}
             onClick={() => onSubmit(token.trim(), repo.trim())}
           >
-            Connect &amp; prepare issues
+            {repoLocked ? "Continue to approval" : "Connect & prepare issues"}
           </Button>
           <Button variant="ghost" onClick={onClose}>
             Cancel

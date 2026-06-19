@@ -347,6 +347,7 @@ export type SadSaveSummary = {
   change_summary: string;
   source_ids: string[];
   created_at: string;
+  has_github_issue_set: boolean;
 };
 
 export type ProjectSavesResponse = {
