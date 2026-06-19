@@ -836,6 +836,31 @@ export async function switchProject(
   return response.json();
 }
 
+export async function deleteProject(
+  idToken: string,
+  projectId: string,
+): Promise<ProjectListResponse> {
+  const response = await fetch(
+    `${baseUrl}/projects/${encodeURIComponent(projectId)}`,
+    {
+      method: "DELETE",
+      headers: {
+        Authorization: `Bearer ${idToken}`,
+      },
+    },
+  );
+
+  if (!response.ok) {
+    const detail = await readBackendErrorDetail(
+      response,
+      "Could not delete this project.",
+    );
+    throw new BackendApiError(detail.message, detail.code, response.status);
+  }
+
+  return response.json();
+}
+
 export async function putProjectSession(
   idToken: string,
   projectId: string,

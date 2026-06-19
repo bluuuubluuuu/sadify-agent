@@ -20,6 +20,7 @@ export function ProjectList({
   busy,
   historyNode,
   onSwitch,
+  onDelete,
   onNewProject,
 }: {
   projects: ProjectSummary[];
@@ -28,6 +29,7 @@ export function ProjectList({
   busy?: boolean;
   historyNode?: ReactNode;
   onSwitch: (projectId: string) => void;
+  onDelete?: (projectId: string) => void;
   onNewProject: () => void;
 }) {
   return (
@@ -36,7 +38,7 @@ export function ProjectList({
         const isActive = project.project_id === activeProjectId;
         const count = saveCounts?.[project.project_id];
         return (
-          <div key={project.project_id}>
+          <div key={project.project_id} className="projectRow">
             <div className={styles.projLine}>
               <button
                 type="button"
@@ -77,6 +79,18 @@ export function ProjectList({
                   <span>GitHub</span>
                 </a>
               ) : null}
+              {onDelete ? (
+                <button
+                  type="button"
+                  className="projectDeleteButton"
+                  disabled={busy}
+                  aria-label={`Delete project ${project.name}`}
+                  title={`Delete project ${project.name}`}
+                  onClick={() => onDelete(project.project_id)}
+                >
+                  <span aria-hidden="true">&#128465;</span>
+                </button>
+              ) : null}
             </div>
             {isActive ? historyNode : null}
           </div>
@@ -86,6 +100,38 @@ export function ProjectList({
         <Icon name="plus" size={16} color="#bfdbfe" />
         New project
       </button>
+      <style jsx>{`
+        .projectDeleteButton {
+          width: 34px;
+          min-width: 34px;
+          border: 1px solid rgba(252, 165, 165, 0.48);
+          border-radius: var(--r-sm);
+          background: rgba(127, 29, 29, 0.22);
+          color: #fecaca;
+          cursor: pointer;
+          font: inherit;
+          font-size: 16px;
+          transition: opacity var(--motion-fast), background var(--motion-fast);
+        }
+        .projectDeleteButton:hover,
+        .projectDeleteButton:focus-visible {
+          background: rgba(185, 28, 28, 0.5);
+          outline: none;
+        }
+        .projectDeleteButton:disabled {
+          cursor: default;
+          opacity: 0.45;
+        }
+        @media (hover: hover) {
+          .projectDeleteButton {
+            opacity: 0;
+          }
+          .projectRow:hover .projectDeleteButton,
+          .projectRow:focus-within .projectDeleteButton {
+            opacity: 1;
+          }
+        }
+      `}</style>
     </>
   );
 }

@@ -20,6 +20,7 @@ export function Sidebar({
   onRepoChanged,
   historyRefreshKey,
   onNewSad,
+  onDeleteProject,
   onSignOut,
 }: {
   displayName: string | null;
@@ -28,6 +29,7 @@ export function Sidebar({
   onRepoChanged: (repo: DriveRepoRecord | null) => void;
   historyRefreshKey: number;
   onNewSad: () => void;
+  onDeleteProject: (projectId: string) => void;
   onSignOut: () => void;
 }) {
   const drive = useDriveRepo(onRepoChanged);
@@ -64,6 +66,7 @@ export function Sidebar({
             activeProjectId={repo.active_project_id}
             busy={projectsHook.isBusy}
             onSwitch={(projectId) => projectsHook.switchTo(projectId)}
+            onDelete={onDeleteProject}
             onNewProject={() => setDialogOpen(true)}
             historyNode={<SaveHistory saves={history.saves} message={history.message} />}
           />

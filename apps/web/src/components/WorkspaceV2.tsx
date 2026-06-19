@@ -3,12 +3,14 @@
 import { onAuthStateChanged } from "firebase/auth";
 import { useEffect, useRef, useState } from "react";
 import {
+  deleteProject,
   getDriveRepoStatus,
   setProjectGithubRepo,
   type CreateProjectResponse,
   type DriveRepoRecord,
   type ModelCatalogResponse,
   type ProjectSessionSnapshot,
+  type ProjectSummary,
   type SourceRecord,
 } from "../lib/api";
 import { getFirebaseAuth } from "../lib/firebaseClient";
@@ -28,6 +30,7 @@ import { AppShell } from "./shell/AppShell";
 import { Sidebar } from "./shell/Sidebar";
 import { ConnectDriveBanner } from "./shell/ConnectDriveBanner";
 import { CreateProjectDialog } from "./shell/CreateProjectDialog";
+import { ConfirmDialog } from "./shell/ConfirmDialog";
 import { ChatPanel } from "./chat/ChatPanel";
 import { ModelPicker } from "./chat/ModelPicker";
 import { ReadinessPane, PreviewPlaceholder } from "./chat/ReadinessPane";
@@ -54,6 +57,9 @@ export function WorkspaceV2() {
   const [startText, setStartText] = useState("");
   const [restoredSourceContext, setRestoredSourceContext] = useState("");
   const [restoredSourceReferences, setRestoredSourceReferences] = useState<string[]>([]);
+  const [deletingProject, setDeletingProject] = useState<ProjectSummary | null>(null);
+  const [deleteBusy, setDeleteBusy] = useState(false);
+  const [deleteError, setDeleteError] = useState("");
   const activeProjectRef = useRef<string | null>(null);
   const restoringRef = useRef(false);
   const pendingModelRef = useRef<string | null>(null);
@@ -92,6 +98,41 @@ export function WorkspaceV2() {
         available_projects: [...others, response.project],
       };
     });
+  }
+
+  async function handleDeleteProject() {
+    const project = deletingProject;
+    const user = getFirebaseAuth().currentUser;
+    if (!project || !user) {
+      return;
+    }
+
+    const deletedActiveProject =
+      project.project_id === driveRepo?.active_project_id;
+    setDeleteBusy(true);
+    setDeleteError("");
+    try {
+      const idToken = await user.getIdToken();
+      await deleteProject(idToken, project.project_id);
+      const updatedRepo = await getDriveRepoStatus(idToken);
+      setDriveRepo(updatedRepo);
+      setDeletingProject(null);
+      if (deletedActiveProject) {
+        session.cancel();
+        qna.reset();
+        sources.reset();
+        sadSave.dismissPreview();
+        setStartText("");
+        setRestoredSourceContext("");
+        setRestoredSourceReferences([]);
+      }
+    } catch (caught) {
+      setDeleteError(
+        caught instanceof Error ? caught.message : "Could not delete this project.",
+      );
+    } finally {
+      setDeleteBusy(false);
+    }
   }
 
   const sadSave = useSadSave({
@@ -347,6 +388,15 @@ export function WorkspaceV2() {
         sources.reset();
         setStartText("");
       }}
+      onDeleteProject={(projectId) => {
+        const project = driveRepo?.available_projects.find(
+          (candidate) => candidate.project_id === projectId,
+        );
+        if (project) {
+          setDeleteError("");
+          setDeletingProject(project);
+        }
+      }}
       onSignOut={() => auth.signOut()}
     />
   );
@@ -447,6 +497,22 @@ export function WorkspaceV2() {
           isBusy={sadSave.isProjectBusy}
           onSubmit={(name) => sadSave.createProjectForPending(name)}
           onCancel={sadSave.cancelProject}
+        />
+      ) : null}
+      {deletingProject ? (
+        <ConfirmDialog
+          title={`Delete ${deletingProject.name}?`}
+          message={
+            deleteError ||
+            "This removes the project and its saved SAD data. Its Drive folder will move to Trash."
+          }
+          confirmLabel="Delete project"
+          busy={deleteBusy}
+          onConfirm={() => void handleDeleteProject()}
+          onCancel={() => {
+            setDeleteError("");
+            setDeletingProject(null);
+          }}
         />
       ) : null}
       {agent.isOpen ? (
