@@ -19,6 +19,7 @@ from sadify_api.services.auth import TokenVerifier
 from sadify_api.services.drive_client import (
     DriveClient,
     DriveFolderCreateError,
+    DriveFolderTrashError,
     DriveTokenInvalidError,
 )
 from sadify_api.services.drive_repo import DriveRepoRepository
@@ -219,6 +220,66 @@ def create_projects_router(
         if snapshot is None:
             return Response(status_code=204)
         return JSONResponse(content=snapshot.model_dump(mode="json"))
+
+    @router.delete("/{project_id}", response_model=ProjectListResponse)
+    def delete_project(
+        project_id: str,
+        authorization: str | None = Header(default=None),
+    ) -> ProjectListResponse:
+        user = _verified_user(authorization, token_verifier)
+        repo = _active_repo_or_error(drive_repo_repository, user.uid)
+        project = project_repository.get_project(repo.grant_id, project_id)
+        if project is None:
+            raise _project_error(
+                404,
+                "PROJECT_NOT_FOUND",
+                "Project not found in this Drive repo.",
+            )
+
+        if config.drive_mode == "live" and not project.drive_folder_id.startswith(
+            "LOCAL-"
+        ):
+            live_drive_client, access_token = _live_drive_context(
+                config=config,
+                drive_client=drive_client,
+                secret_store=secret_store,
+                owner_uid=user.uid,
+            )
+            try:
+                live_drive_client.trash_folder(
+                    access_token,
+                    project.drive_folder_id,
+                )
+            except DriveFolderTrashError as exc:
+                raise _project_error(
+                    502,
+                    "PROJECT_DELETE_DRIVE_FAILED",
+                    "Could not move the project folder to Drive Trash.",
+                ) from exc
+
+        try:
+            sad_save_repository.delete_for_project(repo.grant_id, project_id)
+            session_snapshot_repository.delete(repo.grant_id, project_id)
+            project_repository.delete_project(repo.grant_id, project_id)
+        except Exception as exc:
+            raise _project_error(
+                502,
+                "PROJECT_DELETE_FAILED",
+                "Could not finish deleting the project; retry.",
+            ) from exc
+
+        drive_repo_repository.clear_active_project(repo.grant_id, project_id)
+        projects = project_repository.list_projects(repo.grant_id)
+        drive_repo_repository.set_available_projects(
+            grant_id=repo.grant_id,
+            projects=projects,
+        )
+        refreshed = drive_repo_repository.get_active_repo(user.uid)
+        return ProjectListResponse(
+            active_project_id=(refreshed.active_project_id if refreshed else None),
+            active_project_name=(refreshed.active_project_name if refreshed else None),
+            projects=projects,
+        )
 
     @router.post("/{project_id}/github", response_model=ProjectSummary)
     def link_github_repo(

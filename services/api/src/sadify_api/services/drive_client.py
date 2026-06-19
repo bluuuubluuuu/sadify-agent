@@ -31,6 +31,10 @@ class DriveFolderCreateError(Exception):
     pass
 
 
+class DriveFolderTrashError(Exception):
+    pass
+
+
 class DriveUploadError(Exception):
     pass
 
@@ -200,6 +204,18 @@ class DriveClient:
             and not item.get("trashed", False)
         ]
         return sorted(folders, key=lambda folder: folder.created_time)
+
+    def trash_folder(self, access_token: str, folder_id: str) -> None:
+        service = self._drive_service(access_token)
+        try:
+            service.files().update(
+                fileId=folder_id,
+                body={"trashed": True},
+            ).execute()
+        except Exception as exc:
+            raise DriveFolderTrashError(
+                "Could not move the project folder to Drive Trash."
+            ) from exc
 
     def upload_markdown_as_doc(
         self,

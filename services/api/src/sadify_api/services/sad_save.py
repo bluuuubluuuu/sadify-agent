@@ -70,6 +70,8 @@ class SadSaveRepositoryProtocol(Protocol):
         project_id: str,
     ) -> list[SadSaveRecord]: ...
 
+    def delete_for_project(self, grant_id: str, project_id: str) -> int: ...
+
     def record_count(self) -> int: ...
 
 
@@ -297,6 +299,17 @@ class SadSaveRepository:
             key=lambda record: record.created_at,
             reverse=True,
         )
+
+    def delete_for_project(self, grant_id: str, project_id: str) -> int:
+        keys = [
+            key
+            for key in self._records
+            if key[0] == grant_id and key[1] == project_id
+        ]
+        for key in keys:
+            record = self._records.pop(key)
+            self._by_idempotency_key.pop(record.idempotency_key, None)
+        return len(keys)
 
     def record_count(self) -> int:
         return len(self._records)
@@ -627,6 +640,13 @@ class FirestoreSadSaveRepository:
             if record is not None
         ]
         return sorted(records, key=lambda record: record.created_at, reverse=True)
+
+    def delete_for_project(self, grant_id: str, project_id: str) -> int:
+        records = self.list_for_project(grant_id=grant_id, project_id=project_id)
+        for record in records:
+            self._save_ref(grant_id, project_id, record.save_id).delete()
+            self._idempotency_ref(_idempotency_hash(record.idempotency_key)).delete()
+        return len(records)
 
     def record_count(self) -> int:
         return len(list(self._client.collection("sad_saves").stream()))
