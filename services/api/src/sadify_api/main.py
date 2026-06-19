@@ -36,6 +36,10 @@ from sadify_api.services.firestore_client import get_firestore_client
 from sadify_api.services.sad_preview import SadPreviewRepository
 from sadify_api.services.sad_save import FirestoreSadSaveRepository, SadSaveRepository
 from sadify_api.services.secret_store import SecretStore
+from sadify_api.services.session_state import (
+    FirestoreSessionSnapshotRepository,
+    SessionSnapshotRepository,
+)
 from sadify_api.services.projects import FirestoreProjectRepository, ProjectRepository
 from sadify_api.services.wiki_state import (
     FirestoreWikiStateRepository,
@@ -61,6 +65,7 @@ def create_app(
     secret_store: SecretStore | None = None,
     wiki_state_repository: WikiStateRepository | None = None,
     project_repository: ProjectRepository | None = None,
+    session_snapshot_repository: SessionSnapshotRepository | None = None,
 ) -> FastAPI:
     config = config or load_api_config()
     firestore_client = None
@@ -94,6 +99,11 @@ def create_app(
         FirestoreProjectRepository(firestore_client)
         if firestore_client is not None
         else ProjectRepository()
+    )
+    session_snapshot_repository = session_snapshot_repository or (
+        FirestoreSessionSnapshotRepository(firestore_client)
+        if firestore_client is not None
+        else SessionSnapshotRepository()
     )
     app = FastAPI(title="SADify API", version="0.1.0")
     app.add_middleware(
@@ -147,6 +157,7 @@ def create_app(
             config,
             drive_client,
             secret_store,
+            session_snapshot_repository,
         )
     )
     app.include_router(

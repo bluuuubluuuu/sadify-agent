@@ -1,4 +1,5 @@
-from fastapi import APIRouter, Header, HTTPException
+from fastapi import APIRouter, Header, HTTPException, Response
+from fastapi.responses import JSONResponse
 
 from sadify_api.config import ApiConfig, load_api_config
 from sadify_api.routes.auth import verify_authorization_header
@@ -6,6 +7,7 @@ from sadify_api.schemas import (
     CreateProjectRequest,
     CreateProjectResponse,
     ProjectListResponse,
+    ProjectSessionSnapshot,
     ProjectSavesResponse,
     ProjectSummary,
     SadSaveSummary,
@@ -27,6 +29,7 @@ from sadify_api.services.projects import (
 )
 from sadify_api.services.sad_save import SadSaveRepository
 from sadify_api.services.secret_store import SecretStore, get_secret_store
+from sadify_api.services.session_state import SessionSnapshotRepository
 
 
 def create_projects_router(
@@ -37,8 +40,12 @@ def create_projects_router(
     config: ApiConfig | None = None,
     drive_client: DriveClient | None = None,
     secret_store: SecretStore | None = None,
+    session_snapshot_repository: SessionSnapshotRepository | None = None,
 ) -> APIRouter:
     config = config or load_api_config()
+    session_snapshot_repository = (
+        session_snapshot_repository or SessionSnapshotRepository()
+    )
     router = APIRouter(prefix="/projects", tags=["projects"])
 
     @router.get("", response_model=ProjectListResponse)
@@ -177,6 +184,41 @@ def create_projects_router(
                 for record in records
             ],
         )
+
+    @router.put("/{project_id}/session", status_code=204)
+    def put_project_session(
+        project_id: str,
+        snapshot: ProjectSessionSnapshot,
+        authorization: str | None = Header(default=None),
+    ) -> Response:
+        user = _verified_user(authorization, token_verifier)
+        repo = _active_repo_or_error(drive_repo_repository, user.uid)
+        if project_repository.get_project(repo.grant_id, project_id) is None:
+            raise _project_error(
+                404,
+                "PROJECT_NOT_FOUND",
+                "Project not found in this Drive repo.",
+            )
+        session_snapshot_repository.upsert(repo.grant_id, project_id, snapshot)
+        return Response(status_code=204)
+
+    @router.get("/{project_id}/session")
+    def get_project_session(
+        project_id: str,
+        authorization: str | None = Header(default=None),
+    ) -> Response:
+        user = _verified_user(authorization, token_verifier)
+        repo = _active_repo_or_error(drive_repo_repository, user.uid)
+        if project_repository.get_project(repo.grant_id, project_id) is None:
+            raise _project_error(
+                404,
+                "PROJECT_NOT_FOUND",
+                "Project not found in this Drive repo.",
+            )
+        snapshot = session_snapshot_repository.get(repo.grant_id, project_id)
+        if snapshot is None:
+            return Response(status_code=204)
+        return JSONResponse(content=snapshot.model_dump(mode="json"))
 
     @router.post("/{project_id}/github", response_model=ProjectSummary)
     def link_github_repo(
