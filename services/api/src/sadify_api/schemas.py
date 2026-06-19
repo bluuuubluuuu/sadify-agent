@@ -61,6 +61,26 @@ class AgentGitHubIssuesPrepareRequest(ApiModel):
     model: str | None = None
 
 
+class GithubIssueDraft(ApiModel):
+    marker: str = Field(min_length=1)
+    title: str = Field(min_length=1, max_length=256)
+    body: str = Field(min_length=1, max_length=65536)
+    labels: list[str] = Field(default_factory=list, max_length=10)
+
+
+class GithubIssueSet(ApiModel):
+    grant_id: str = Field(min_length=1)
+    project_id: str = Field(min_length=1)
+    save_id: str = Field(min_length=1)
+    preview_id: str = Field(min_length=1)
+    owner_uid: str = Field(min_length=1)
+    repo: str = Field(min_length=3)
+    status: Literal["prepared"] = "prepared"
+    issues: list[GithubIssueDraft] = Field(min_length=1, max_length=20)
+    created_at: datetime
+    updated_at: datetime
+
+
 class AgentGitHubIssuesApproveRequest(ApiModel):
     analysis_session_id: str = Field(min_length=1)
     approval_id: str = Field(min_length=1)
