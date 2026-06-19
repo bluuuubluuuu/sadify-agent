@@ -18,11 +18,13 @@ from sadify_api.schemas import (
     AgentFinalizeResponse,
     AgentGitHubIssuesApproveRequest,
     AgentGitHubIssuesPrepareRequest,
+    AgentGitHubIssuesRelaunchRequest,
 )
 from sadify_api.services.github_issue_flow import (
     GitHubIssueFlowError,
     approve_github_issues,
     prepare_github_issues,
+    relaunch_github_issues,
 )
 from sadify_api.services.auth import TokenVerifier
 from sadify_api.services.analysis_state import RequirementAnalysisRepository
@@ -34,6 +36,7 @@ from sadify_api.services.gemini_structured import (
     SadPreviewModel,
     SadReviewModel,
 )
+from sadify_api.services.github_issue_sets import GithubIssueSetRepositoryProtocol
 from sadify_api.services.model_catalog import resolve_gemini_model
 from sadify_api.services.projects import ProjectRepository
 from sadify_api.services.sad_preview import SadPreviewRepository
@@ -61,9 +64,12 @@ def create_agent_router(
     sad_review_model: SadReviewModel | None = None,
     dev_task_model: DevTaskExtractionModel | None = None,
     approval_store: ApprovalStore | None = None,
+    github_issue_set_repository: GithubIssueSetRepositoryProtocol | None = None,
 ) -> APIRouter:
     router = APIRouter(prefix="/agent", tags=["agent"])
     approval_store = approval_store or ApprovalStore()
+    if github_issue_set_repository is None:
+        raise ValueError("github_issue_set_repository is required")
 
     @router.post("/finalize", response_model=AgentFinalizeResponse)
     def finalize(request: AgentFinalizeRequest) -> AgentFinalizeResponse:
@@ -125,16 +131,42 @@ def create_agent_router(
     @router.post("/github/issues/prepare", response_model=AgentFinalizeResponse)
     def prepare_github_issue_creation(
         request: AgentGitHubIssuesPrepareRequest,
+        authorization: str | None = Header(default=None),
     ) -> AgentFinalizeResponse:
+        user = verify_authorization_header(authorization, token_verifier)
         try:
             result = prepare_github_issues(
                 preview_repository=sad_preview_repository,
                 dev_task_model=dev_task_model,
                 config=config,
                 analysis_session_id=request.analysis_session_id,
-                preview_id=request.preview_id,
+                save_id=request.save_id,
                 repo=request.repo,
                 model=resolve_gemini_model(request.model, config),
+                approval_store=approval_store,
+                user=user,
+                drive_repo_repository=drive_repo_repository,
+                sad_save_repository=sad_save_repository,
+                issue_set_repository=github_issue_set_repository,
+            )
+        except GitHubIssueFlowError as exc:
+            raise _github_http_error(exc) from exc
+        return AgentFinalizeResponse.model_validate(result)
+
+    @router.post("/github/issues/relaunch", response_model=AgentFinalizeResponse)
+    def relaunch_github_issue_creation(
+        request: AgentGitHubIssuesRelaunchRequest,
+        authorization: str | None = Header(default=None),
+    ) -> AgentFinalizeResponse:
+        user = verify_authorization_header(authorization, token_verifier)
+        try:
+            result = relaunch_github_issues(
+                analysis_session_id=request.analysis_session_id,
+                save_id=request.save_id,
+                user=user,
+                drive_repo_repository=drive_repo_repository,
+                sad_save_repository=sad_save_repository,
+                issue_set_repository=github_issue_set_repository,
                 approval_store=approval_store,
             )
         except GitHubIssueFlowError as exc:
@@ -154,6 +186,9 @@ def create_agent_router(
                 approval_id=request.approval_id,
                 approval_store=approval_store,
                 user=user,
+                drive_repo_repository=drive_repo_repository,
+                sad_save_repository=sad_save_repository,
+                issue_set_repository=github_issue_set_repository,
                 github_token=request.github_token,
             )
         except GitHubIssueFlowError as exc:

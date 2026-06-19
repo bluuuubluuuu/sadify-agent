@@ -1,5 +1,6 @@
 import json
 from collections.abc import AsyncGenerator
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -11,7 +12,7 @@ from google.genai import types
 from sadify_api.agent.approval import ApprovalStore
 from sadify_api.config import ApiConfig
 from sadify_api.main import create_app
-from sadify_api.schemas import SadPreviewResponse
+from sadify_api.schemas import AuthenticatedUser, GithubIssueDraft, GithubIssueSet, SadPreviewResponse
 from sadify_api.services.analysis_state import RequirementAnalysisRepository
 from sadify_api.services.github_issue_flow import (
     GitHubIssueFlowError,
@@ -19,8 +20,10 @@ from sadify_api.services.github_issue_flow import (
     approve_github_issues,
     build_github_mcp_toolset,
     prepare_github_issues,
+    relaunch_github_issues,
     run_github_issue_prepare_agent,
 )
+from sadify_api.services.github_issue_sets import GithubIssueSetRepository
 from sadify_api.services.sad_preview import SadPreviewRepository
 from tests.api.test_gemini_structured import FakeRequirementAnalysisModel
 from tests.api.test_sad_preview import FakeSadPreviewModel, VALID_PREVIEW
@@ -172,8 +175,13 @@ def test_prepare_github_issues_extracts_tasks_and_stores_agent_mcp_approval():
 def test_prepare_agent_invokes_create_github_issues_through_stdio_mcp_toolset():
     issues = [
         {
+            "marker": "<!-- sadify-github-issue:legacy:SP-1:0 -->",
             "title": "Build appointment intake",
-            "body": "Priority: high\n\nCapture grooming appointment details.\n\nSource references: SRC-000001",
+            "body": (
+                "Priority: high\n\nCapture grooming appointment details.\n\n"
+                "Source references: SRC-000001\n\n"
+                "<!-- sadify-github-issue:legacy:SP-1:0 -->"
+            ),
             "labels": ["sadify", "priority-high"],
         }
     ]
@@ -540,9 +548,10 @@ def test_agent_github_prepare_and_approve_routes(monkeypatch):
 
     prepare_response = client.post(
         "/agent/github/issues/prepare",
+        headers={"Authorization": "Bearer firebase-test-token"},
         json={
             "analysis_session_id": "session-route",
-            "preview_id": "SP-ROUTE",
+            "save_id": "SV-ROUTE",
             "model": "not-in-catalog",
         },
     )
@@ -560,10 +569,402 @@ def test_agent_github_prepare_and_approve_routes(monkeypatch):
     assert prepare_response.json()["status"] == "awaiting_approval"
     assert approve_response.status_code == 200
     assert approve_response.json()["status"] == "completed"
-    assert captured["prepare"]["preview_id"] == "SP-ROUTE"
+    assert captured["prepare"]["save_id"] == "SV-ROUTE"
+    assert captured["prepare"]["user"].uid == "firebase-uid-001"
     assert captured["prepare"]["model"] == "gemini-2.5-flash"
     assert captured["approve"]["approval_id"] == "AP-route"
     assert captured["approve"]["user"].uid == "firebase-uid-001"
+
+
+def _secure_flow_dependencies(*, preview_available: bool = True, owner_uid: str = "user-1"):
+    preview_repository = SadPreviewRepository()
+    preview = None
+    if preview_available:
+        preview = preview_repository.save_preview(
+            requirement_text="Need a grooming appointment system.",
+            analysis_id="AN-1",
+            preview=SadPreviewResponse.model_validate(VALID_PREVIEW),
+        )
+    save = SimpleNamespace(
+        save_id="SV-1",
+        preview_id=preview.preview_id if preview is not None else "SP-missing",
+        owner_uid=owner_uid,
+    )
+
+    class DriveRepos:
+        def get_active_repo(self, uid):
+            return SimpleNamespace(grant_id="DRG-1", active_project_id="PR-1")
+
+    class Saves:
+        def get_save(self, save_id, *, repo_grant_id=None, project_id=None):
+            if (save_id, repo_grant_id, project_id) != ("SV-1", "DRG-1", "PR-1"):
+                return None
+            return save
+
+    return preview_repository, DriveRepos(), Saves(), GithubIssueSetRepository()
+
+
+def _verified_user(uid: str = "user-1") -> AuthenticatedUser:
+    return AuthenticatedUser(
+        uid=uid,
+        email="owner@example.com",
+        display_name="Owner",
+        provider="firebase",
+    )
+
+
+def _approval_agent_runner(*, repo, issues, **_kwargs):
+    return {
+        "approval_required": True,
+        "tool": "create_github_issues",
+        "repo": repo,
+        "proposed_actions": [
+            {
+                "id": "create_github_issues",
+                "label": "Create GitHub issues",
+                "repo": repo,
+                "issue_count": len(issues),
+                "issues": issues,
+            }
+        ],
+    }
+
+
+def test_saved_sad_prepare_persists_marked_set_before_approval():
+    preview_repo, drive_repos, saves, issue_sets = _secure_flow_dependencies()
+    store = ApprovalStore()
+
+    result = prepare_github_issues(
+        preview_repository=preview_repo,
+        dev_task_model=FakeDevTaskModel(
+            [
+                {
+                    "tasks": [
+                        {
+                            "priority": "high",
+                            "title": "Build appointment intake",
+                            "description": "Capture grooming appointment details.",
+                            "source_references": ["SRC-000001"],
+                        }
+                    ]
+                }
+            ]
+        ),
+        config=ApiConfig(environment="test", github_mcp_enabled=True),
+        analysis_session_id="session-secure",
+        save_id="SV-1",
+        model="gemini-2.5-flash",
+        approval_store=store,
+        repo="acme/app",
+        user=_verified_user(),
+        drive_repo_repository=drive_repos,
+        sad_save_repository=saves,
+        issue_set_repository=issue_sets,
+        agent_runner=_approval_agent_runner,
+        mcp_toolset_factory=lambda **kwargs: kwargs,
+    )
+
+    stored = issue_sets.get("DRG-1", "PR-1", "SV-1")
+    assert result["status"] == "awaiting_approval"
+    assert stored is not None
+    assert stored.repo == "acme/app"
+    assert stored.issues[0].marker == "<!-- sadify-github-issue:PR-1:SV-1:0 -->"
+    assert stored.issues[0].body.endswith(stored.issues[0].marker)
+    approval = store.get("session-secure", result["result"]["approval_id"])
+    assert approval is not None
+    assert approval.actions[0]["save_id"] == "SV-1"
+
+
+def test_repeated_prepare_reuses_locked_set_without_extracting_again():
+    preview_repo, drive_repos, saves, issue_sets = _secure_flow_dependencies()
+    now = preview_repo.get_preview("SP-000001").created_at
+    issue_sets.create_if_absent(
+        GithubIssueSet(
+            grant_id="DRG-1",
+            project_id="PR-1",
+            save_id="SV-1",
+            preview_id="SP-000001",
+            owner_uid="user-1",
+            repo="acme/original",
+            issues=[
+                GithubIssueDraft(
+                    marker="<!-- sadify-github-issue:PR-1:SV-1:0 -->",
+                    title="Stored task",
+                    body="Stored body",
+                )
+            ],
+            created_at=now,
+            updated_at=now,
+        )
+    )
+    model = FakeDevTaskModel([])
+
+    result = prepare_github_issues(
+        preview_repository=preview_repo,
+        dev_task_model=model,
+        config=ApiConfig(environment="test", github_mcp_enabled=True),
+        analysis_session_id="session-new",
+        save_id="SV-1",
+        model="gemini-2.5-flash",
+        approval_store=ApprovalStore(),
+        repo="acme/other",
+        user=_verified_user(),
+        drive_repo_repository=drive_repos,
+        sad_save_repository=saves,
+        issue_set_repository=issue_sets,
+    )
+
+    assert result["result"]["repo"] == "acme/original"
+    assert model.requests == []
+
+
+def test_relaunch_uses_stored_set_and_mints_fresh_approval():
+    preview_repo, drive_repos, saves, issue_sets = _secure_flow_dependencies()
+    now = preview_repo.get_preview("SP-000001").created_at
+    issue_sets.create_if_absent(
+        GithubIssueSet(
+            grant_id="DRG-1",
+            project_id="PR-1",
+            save_id="SV-1",
+            preview_id="SP-000001",
+            owner_uid="user-1",
+            repo="acme/original",
+            issues=[GithubIssueDraft(marker="marker", title="Task", body="Body")],
+            created_at=now,
+            updated_at=now,
+        )
+    )
+    store = ApprovalStore()
+
+    result = relaunch_github_issues(
+        analysis_session_id="session-relaunch",
+        save_id="SV-1",
+        user=_verified_user(),
+        drive_repo_repository=drive_repos,
+        sad_save_repository=saves,
+        issue_set_repository=issue_sets,
+        approval_store=store,
+    )
+
+    assert result["status"] == "awaiting_approval"
+    assert result["result"]["repo"] == "acme/original"
+    assert result["result"]["save_id"] == "SV-1"
+    assert store.get("session-relaunch", result["result"]["approval_id"]) is not None
+
+
+def test_prepare_missing_preview_and_set_returns_recovery_error():
+    preview_repo, drive_repos, saves, issue_sets = _secure_flow_dependencies(
+        preview_available=False
+    )
+
+    with pytest.raises(GitHubIssueFlowError) as exc_info:
+        prepare_github_issues(
+            preview_repository=preview_repo,
+            dev_task_model=FakeDevTaskModel([]),
+            config=ApiConfig(environment="test", github_mcp_enabled=True),
+            analysis_session_id="session-secure",
+            save_id="SV-1",
+            model="gemini-2.5-flash",
+            approval_store=ApprovalStore(),
+            repo="acme/app",
+            user=_verified_user(),
+            drive_repo_repository=drive_repos,
+            sad_save_repository=saves,
+            issue_set_repository=issue_sets,
+        )
+
+    assert exc_info.value.code == "GITHUB_ISSUE_SET_NOT_FOUND"
+    assert "Regenerate and save a new draft" in exc_info.value.message
+
+
+def test_prepare_rejects_save_owned_by_another_user():
+    preview_repo, drive_repos, saves, issue_sets = _secure_flow_dependencies(
+        owner_uid="other-user"
+    )
+
+    with pytest.raises(GitHubIssueFlowError) as exc_info:
+        prepare_github_issues(
+            preview_repository=preview_repo,
+            dev_task_model=FakeDevTaskModel([]),
+            config=ApiConfig(environment="test", github_mcp_enabled=True),
+            analysis_session_id="session-secure",
+            save_id="SV-1",
+            model="gemini-2.5-flash",
+            approval_store=ApprovalStore(),
+            repo="acme/app",
+            user=_verified_user(),
+            drive_repo_repository=drive_repos,
+            sad_save_repository=saves,
+            issue_set_repository=issue_sets,
+        )
+
+    assert exc_info.value.code == "GITHUB_ISSUE_SET_SCOPE_INVALID"
+
+
+def test_prepare_route_requires_authentication():
+    client = TestClient(
+        create_app(
+            config=ApiConfig(environment="test", github_mcp_enabled=True),
+            token_verifier=AcceptingTokenVerifier(),
+            analysis_model=FakeRequirementAnalysisModel([]),
+            sad_preview_model=FakeSadPreviewModel([]),
+        )
+    )
+
+    response = client.post(
+        "/agent/github/issues/prepare",
+        json={
+            "analysis_session_id": "session-route",
+            "save_id": "SV-1",
+            "repo": "acme/app",
+        },
+    )
+
+    assert response.status_code == 401
+
+
+def _seed_relaunch_approval():
+    preview_repo, drive_repos, saves, issue_sets = _secure_flow_dependencies()
+    now = preview_repo.get_preview("SP-000001").created_at
+    issue_set = issue_sets.create_if_absent(
+        GithubIssueSet(
+            grant_id="DRG-1",
+            project_id="PR-1",
+            save_id="SV-1",
+            preview_id="SP-000001",
+            owner_uid="user-1",
+            repo="acme/app",
+            issues=[
+                GithubIssueDraft(
+                    marker="<!-- sadify-github-issue:PR-1:SV-1:0 -->",
+                    title="Task",
+                    body="Body",
+                )
+            ],
+            created_at=now,
+            updated_at=now,
+        )
+    )
+    store = ApprovalStore()
+    result = relaunch_github_issues(
+        analysis_session_id="session-secure",
+        save_id="SV-1",
+        user=_verified_user(),
+        drive_repo_repository=drive_repos,
+        sad_save_repository=saves,
+        issue_set_repository=issue_sets,
+        approval_store=store,
+    )
+    return (
+        result["result"]["approval_id"],
+        store,
+        drive_repos,
+        saves,
+        issue_sets,
+        issue_set,
+    )
+
+
+def test_secure_approve_rejects_different_owner_before_mcp():
+    approval_id, store, drive_repos, saves, issue_sets, _ = _seed_relaunch_approval()
+    mcp_calls = []
+
+    with pytest.raises(GitHubIssueFlowError) as exc_info:
+        approve_github_issues(
+            config=ApiConfig(environment="test", github_mcp_enabled=True),
+            analysis_session_id="session-secure",
+            approval_id=approval_id,
+            approval_store=store,
+            user=_verified_user("user-2"),
+            drive_repo_repository=drive_repos,
+            sad_save_repository=saves,
+            issue_set_repository=issue_sets,
+            token_provider=lambda: "ghp_secret",
+            mcp_executor=lambda **kwargs: mcp_calls.append(kwargs),
+        )
+
+    assert exc_info.value.code == "GITHUB_ISSUE_SET_SCOPE_INVALID"
+    assert mcp_calls == []
+
+
+def test_secure_approve_rejects_mutated_payload_before_mcp():
+    approval_id, store, drive_repos, saves, issue_sets, _ = _seed_relaunch_approval()
+    approval = store.get("session-secure", approval_id)
+    approval.actions[0]["repo"] = "acme/mutated"
+    mcp_calls = []
+
+    with pytest.raises(GitHubIssueFlowError) as exc_info:
+        approve_github_issues(
+            config=ApiConfig(environment="test", github_mcp_enabled=True),
+            analysis_session_id="session-secure",
+            approval_id=approval_id,
+            approval_store=store,
+            user=_verified_user(),
+            drive_repo_repository=drive_repos,
+            sad_save_repository=saves,
+            issue_set_repository=issue_sets,
+            token_provider=lambda: "ghp_secret",
+            mcp_executor=lambda **kwargs: mcp_calls.append(kwargs),
+        )
+
+    assert exc_info.value.code == "GITHUB_ISSUE_SET_MISMATCH"
+    assert mcp_calls == []
+
+
+def test_secure_approve_all_skipped_is_success_and_consumes_approval():
+    approval_id, store, drive_repos, saves, issue_sets, _ = _seed_relaunch_approval()
+
+    result = approve_github_issues(
+        config=ApiConfig(environment="test", github_mcp_enabled=True),
+        analysis_session_id="session-secure",
+        approval_id=approval_id,
+        approval_store=store,
+        user=_verified_user(),
+        drive_repo_repository=drive_repos,
+        sad_save_repository=saves,
+        issue_set_repository=issue_sets,
+        token_provider=lambda: "ghp_secret",
+        mcp_executor=lambda **_kwargs: {
+            "status": "created",
+            "repo": "acme/app",
+            "created_issues": [],
+            "skipped_issues": [{"number": 7, "marker": "marker"}],
+            "totals": {"requested": 1, "created": 0, "skipped": 1},
+        },
+    )
+
+    assert result["status"] == "completed"
+    assert result["result"]["totals"] == {"requested": 1, "created": 0, "skipped": 1}
+    assert store.get("session-secure", approval_id) is None
+
+
+def test_secure_approve_partial_failure_preserves_approval_and_progress():
+    approval_id, store, drive_repos, saves, issue_sets, _ = _seed_relaunch_approval()
+
+    result = approve_github_issues(
+        config=ApiConfig(environment="test", github_mcp_enabled=True),
+        analysis_session_id="session-secure",
+        approval_id=approval_id,
+        approval_store=store,
+        user=_verified_user(),
+        drive_repo_repository=drive_repos,
+        sad_save_repository=saves,
+        issue_set_repository=issue_sets,
+        token_provider=lambda: "ghp_secret",
+        mcp_executor=lambda **_kwargs: {
+            "status": "error",
+            "code": "GITHUB_API_ERROR",
+            "message": "Second issue failed.",
+            "created_issues": [{"number": 1}],
+            "skipped_issues": [],
+            "totals": {"requested": 2, "created": 1, "skipped": 0},
+        },
+    )
+
+    assert result["status"] == "awaiting_approval"
+    assert result["result"]["created_issues"] == [{"number": 1}]
+    assert result["result"]["totals"]["created"] == 1
+    assert store.get("session-secure", approval_id) is not None
 
 
 class FakeDevTaskModel:

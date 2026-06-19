@@ -56,9 +56,14 @@ class AgentApproveRequest(ApiModel):
 
 class AgentGitHubIssuesPrepareRequest(ApiModel):
     analysis_session_id: str = Field(min_length=1)
-    preview_id: str = Field(min_length=1)
+    save_id: str = Field(min_length=1)
     repo: str | None = None
     model: str | None = None
+
+
+class AgentGitHubIssuesRelaunchRequest(ApiModel):
+    analysis_session_id: str = Field(min_length=1)
+    save_id: str = Field(min_length=1)
 
 
 class GithubIssueDraft(ApiModel):

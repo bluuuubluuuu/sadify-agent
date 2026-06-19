@@ -33,6 +33,10 @@ from sadify_api.services.drive_repo import (
 )
 from sadify_api.services.drive_client import DriveClient
 from sadify_api.services.firestore_client import get_firestore_client
+from sadify_api.services.github_issue_sets import (
+    FirestoreGithubIssueSetRepository,
+    GithubIssueSetRepository,
+)
 from sadify_api.services.sad_preview import SadPreviewRepository
 from sadify_api.services.sad_save import FirestoreSadSaveRepository, SadSaveRepository
 from sadify_api.services.secret_store import SecretStore
@@ -66,6 +70,7 @@ def create_app(
     wiki_state_repository: WikiStateRepository | None = None,
     project_repository: ProjectRepository | None = None,
     session_snapshot_repository: SessionSnapshotRepository | None = None,
+    github_issue_set_repository: GithubIssueSetRepository | None = None,
 ) -> FastAPI:
     config = config or load_api_config()
     firestore_client = None
@@ -105,6 +110,11 @@ def create_app(
         if firestore_client is not None
         else SessionSnapshotRepository()
     )
+    github_issue_set_repository = github_issue_set_repository or (
+        FirestoreGithubIssueSetRepository(firestore_client)
+        if firestore_client is not None
+        else GithubIssueSetRepository()
+    )
     app = FastAPI(title="SADify API", version="0.1.0")
     app.add_middleware(
         CORSMiddleware,
@@ -132,6 +142,7 @@ def create_app(
             project_repository=project_repository,
             sad_review_model=sad_review_model,
             dev_task_model=dev_task_model,
+            github_issue_set_repository=github_issue_set_repository,
         )
     )
     app.include_router(create_auth_router(token_verifier))
