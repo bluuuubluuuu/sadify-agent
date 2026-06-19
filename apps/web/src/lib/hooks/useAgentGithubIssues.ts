@@ -165,6 +165,10 @@ export function useAgentGithubIssues({
     setIsOpen(false);
   }
 
+  function open() {
+    setIsOpen(true);
+  }
+
   return {
     isOpen,
     events,
@@ -181,6 +185,7 @@ export function useAgentGithubIssues({
     relaunch,
     approve,
     close,
+    open,
   };
 }
 

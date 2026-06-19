@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { DriveRepoRecord, SadSaveSummary } from "../../lib/api";
 import { useDriveRepo } from "../../lib/hooks/useDriveRepo";
 import { useProjects } from "../../lib/hooks/useProjects";
@@ -40,6 +40,18 @@ export function Sidebar({
   const projectsHook = useProjects(repo, onRepoChanged);
   const history = useSaveHistory(repo?.active_project_id ?? null, historyRefreshKey);
   const [dialogOpen, setDialogOpen] = useState(false);
+  const refreshedGrantRef = useRef<string | null>(null);
+
+  // The Drive-status snapshot's available_projects can be stale for fields set
+  // after connect (e.g. github_repo). Pull the source-of-truth project list once
+  // per grant so the sidebar GitHub chip (and active repo) survive reloads.
+  useEffect(() => {
+    const grantId = repo?.grant_id ?? null;
+    if (grantId && refreshedGrantRef.current !== grantId) {
+      refreshedGrantRef.current = grantId;
+      void projectsHook.refresh();
+    }
+  }, [repo?.grant_id]);
 
   async function handleCreate(name: string) {
     await projectsHook.create(name);

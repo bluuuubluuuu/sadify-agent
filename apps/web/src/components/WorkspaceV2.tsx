@@ -185,6 +185,9 @@ export function WorkspaceV2() {
       githubIssues.setGithubToken(token);
       setGithubConnectOpen(false);
       setGithubResumeRepo(null);
+      // Reopen the approval card now that the token is set, so the user lands
+      // straight on "Approve & create issues".
+      githubIssues.open();
       return;
     }
     const projectId = driveRepo?.active_project_id;
@@ -227,6 +230,10 @@ export function WorkspaceV2() {
       return;
     }
     if (!githubIssues.hasToken) {
+      // Token-first: hide the approval card while the (repo-locked) token modal
+      // is shown, then reopen it once the token is pasted. Avoids stacking the
+      // token modal behind the approval card.
+      githubIssues.close();
       setGithubResumeRepo(lockedRepo);
       setGithubConnectError("");
       setGithubConnectOpen(true);
