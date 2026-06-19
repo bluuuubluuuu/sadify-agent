@@ -21,6 +21,7 @@ export function Sidebar({
   historyRefreshKey,
   onNewSad,
   onDeleteProject,
+  onSignIn,
   onSignOut,
 }: {
   displayName: string | null;
@@ -30,6 +31,7 @@ export function Sidebar({
   historyRefreshKey: number;
   onNewSad: () => void;
   onDeleteProject: (projectId: string) => void;
+  onSignIn: () => void;
   onSignOut: () => void;
 }) {
   const drive = useDriveRepo(onRepoChanged);
@@ -79,6 +81,7 @@ export function Sidebar({
         repo={repo}
         onConnect={() => drive.connect()}
         onDisconnect={() => drive.disconnect()}
+        onSignIn={onSignIn}
         onSignOut={onSignOut}
       />
 

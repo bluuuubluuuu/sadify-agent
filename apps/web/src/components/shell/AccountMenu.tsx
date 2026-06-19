@@ -11,6 +11,7 @@ export function AccountMenu({
   repo,
   onConnect,
   onDisconnect,
+  onSignIn,
   onSignOut,
 }: {
   name: string | null;
@@ -18,10 +19,12 @@ export function AccountMenu({
   repo: DriveRepoRecord | null;
   onConnect: () => void;
   onDisconnect: () => void;
+  onSignIn: () => void;
   onSignOut: () => void;
 }) {
   const [open, setOpen] = useState(false);
-  const initials = (name ?? email ?? "?").slice(0, 2).toUpperCase();
+  const isSignedIn = Boolean(name || email);
+  const initials = isSignedIn ? (name ?? email ?? "?").slice(0, 2).toUpperCase() : "?";
   const connected = Boolean(repo && !repo.saves_blocked);
 
   return (
@@ -44,15 +47,15 @@ export function AccountMenu({
         <span className={styles.avatar}>{initials}</span>
         <span style={{ minWidth: 0, flex: 1 }}>
           <span className={styles.acctName} style={{ display: "block" }}>
-            {name ?? "Guest"}
+            {isSignedIn ? (name ?? email ?? "Account") : "Guest"}
           </span>
-          {email ? (
+          {isSignedIn && email ? (
             <span className={styles.acctEmail} style={{ display: "block" }}>
               {email}
             </span>
           ) : null}
         </span>
-        {name || email ? (
+        {isSignedIn ? (
           <span className={`${styles.acctChip} ${connected ? styles.acctChipOn : styles.acctChipOff}`}>
             <Icon
               name={connected ? "cloudCheck" : "circle"}
@@ -61,48 +64,74 @@ export function AccountMenu({
             />
             {connected ? "Drive" : "Connect"}
           </span>
-        ) : null}
+        ) : (
+          <span className={`${styles.acctChip} ${styles.acctChipOff}`}>Sign in</span>
+        )}
       </button>
 
       {open ? (
         <div className={styles.menu} role="menu">
-          <div className={styles.menuHead}>Signed in</div>
-          <div className={styles.mRow}>
-            <Icon name="user" size={18} color="var(--c-subtle)" />
-            {name ?? email ?? "Account"}
-          </div>
-          <div className={styles.sep} />
-          <div className={styles.menuHead}>Google Drive</div>
-          {connected && repo ? (
+          {isSignedIn ? (
             <>
-              <div className={styles.mRow}>
-                <Icon name="cloudCheck" size={18} color="var(--c-subtle)" />
-                {repo.repo_folder_name}
-                <span className={styles.mMeta}>Connected</span>
-              </div>
-              {repo.repo_url ? (
-                <a
+              <div className={styles.menuHead}>Google Drive</div>
+              {connected && repo ? (
+                <>
+                  <div className={styles.mRow}>
+                    <Icon name="cloudCheck" size={18} color="var(--c-subtle)" />
+                    {repo.repo_folder_name}
+                    <span className={styles.mMeta}>Connected</span>
+                  </div>
+                  {repo.repo_url ? (
+                    <a
+                      className={styles.mRow}
+                      href={repo.repo_url}
+                      target="_blank"
+                      rel="noreferrer"
+                      role="menuitem"
+                    >
+                      <Icon name="openExternal" size={18} color="var(--c-subtle)" />
+                      Open repo in Drive
+                    </a>
+                  ) : null}
+                  <button
+                    type="button"
+                    className={`${styles.mRow} ${styles.mDanger}`}
+                    role="menuitem"
+                    onClick={() => {
+                      setOpen(false);
+                      onDisconnect();
+                    }}
+                  >
+                    <Icon name="cloudCheck" size={18} color="var(--c-danger)" />
+                    Disconnect Drive
+                  </button>
+                </>
+              ) : (
+                <button
+                  type="button"
                   className={styles.mRow}
-                  href={repo.repo_url}
-                  target="_blank"
-                  rel="noreferrer"
                   role="menuitem"
+                  onClick={() => {
+                    setOpen(false);
+                    onConnect();
+                  }}
                 >
-                  <Icon name="openExternal" size={18} color="var(--c-subtle)" />
-                  Open repo in Drive
-                </a>
-              ) : null}
+                  <Icon name="cloudCheck" size={18} color="var(--c-subtle)" />
+                  Connect Google Drive
+                </button>
+              )}
+              <div className={styles.sep} />
               <button
                 type="button"
                 className={`${styles.mRow} ${styles.mDanger}`}
                 role="menuitem"
                 onClick={() => {
                   setOpen(false);
-                  onDisconnect();
+                  onSignOut();
                 }}
               >
-                <Icon name="cloudCheck" size={18} color="var(--c-danger)" />
-                Disconnect Drive
+                <Icon name="signOut" size={18} color="var(--c-danger)" />
+                Sign out
               </button>
             </>
           ) : (
@@ -112,26 +141,13 @@ export function AccountMenu({
               role="menuitem"
               onClick={() => {
                 setOpen(false);
-                onConnect();
+                onSignIn();
               }}
             >
-              <Icon name="cloudCheck" size={18} color="var(--c-subtle)" />
-              Connect Google Drive
+              <Icon name="google" size={18} color="var(--c-primary)" />
+              Sign in with Google
             </button>
           )}
-          <div className={styles.sep} />
-          <button
-            type="button"
-            className={`${styles.mRow} ${styles.mDanger}`}
-            role="menuitem"
-            onClick={() => {
-              setOpen(false);
-              onSignOut();
-            }}
-          >
-            <Icon name="signOut" size={18} color="var(--c-danger)" />
-            Sign out
-          </button>
         </div>
       ) : null}
     </div>

@@ -397,6 +397,7 @@ export function WorkspaceV2() {
           setDeletingProject(project);
         }
       }}
+      onSignIn={() => void auth.signIn().catch(() => undefined)}
       onSignOut={() => auth.signOut()}
     />
   );
