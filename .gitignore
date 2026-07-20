@@ -1,7 +1,7 @@
-# Planning and handoff documents
-/CLAUDE.md
-/context.md
-/docs/
+# Planning and handoff documents are tracked as of 2026-07-20 so they are
+# backed up, reviewable in diffs, and present in every git worktree.
+# Third-party source material stays untracked: not ours to redistribute.
+/docs/sources/
 /tmp/
 
 # Local secrets and machine-specific config
