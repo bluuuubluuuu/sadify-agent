@@ -86,7 +86,8 @@ Do not silently choose between conflicting docs. State the conflict, use the pri
 
 ## Current Project Status
 
-The MVP is built, tested, and deployed. All six original phases are complete.
+The MVP is built, tested, and deployed. All six original phases are closed:
+five completed, one (Phase 4) superseded rather than passed.
 Current work is the post-hackathon product restructure (Approach B, agreed
 2026-07-20): repo hygiene first, then the two unbuilt MVP exports, then a
 first-run path for a user who is not the author.
@@ -98,9 +99,11 @@ Phase 0 - Original planning / challenge context: complete; historical source mat
 Phase 1 - Streamlit prototype baseline: complete through Cloud Run smoke.
 Phase 2 - Proper MVP scaffold and full-stack foundation: MVP-00 through MVP-09 passed.
 Phase 3 - Q&A workflow stabilization: TC-021R superseded; TC-021S and TC-021T passed.
-Phase 4 - SAD preview and SAD quality stabilization: complete. The TC-021 R-Y
-          cascade is consolidated into docs/superpowers/archive/. Superseded by
-          TC-028 evidence-based readiness, which passed on 2026-05-24.
+Phase 4 - SAD preview and SAD quality stabilization: superseded. The TC-021 R-Y
+          cascade is consolidated into docs/superpowers/archive/. TC-021Y never
+          recorded a manual-smoke pass; the keyword/phrase readiness approach it
+          was hardening was replaced by TC-028 evidence-based readiness, which
+          passed on 2026-05-24 (decision log, 2026-05-23).
 Phase 5 - Wiki/Drive/Docs save path: complete. TC-025A snapshot, TC-025B
           encyclopedia wiki, TC-026 local save, TC-026B live Drive/Docs,
           TC-026D project isolation, TC-026E save history all passed.
