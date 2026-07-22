@@ -1,7 +1,40 @@
 # SADify Current Work Brief
 
-Date: 2026-06-19
-Status: GitHub issue relaunch implemented and automated regression passed; TC-036 live recovery smoke and deployment decision pending
+Date: 2026-07-22
+Status: Phase 8.1 complete. main merged, CI-gated, and redeployed to Cloud Run. Next: Phase 8.2 (PDF/DOCX export).
+
+## Phase 8.1 Redeploy - DONE (2026-07-22)
+
+`main` caught up to the worktree (18 commits: the GitHub-relaunch/session/delete
+backlog plus rate limiting, token metering, the logging fix, and CI) and was
+redeployed to Cloud Run. Same services, same URLs, new revisions:
+
+```text
+sadify-api  -> sadify-api-00010-m9c   (was sadify-api-00005-pc2, 2026-06-04)
+sadify-web  -> sadify-web-00005-499   (was sadify-web-00002-vzw, 2026-06-04)
+Region asia-southeast1, runtime SA sadify-agent-sa, scale-to-zero.
+```
+
+Deployed from Google Cloud Shell (local gcloud is blocked by Norton TLS
+interception; the browser shell bypasses it). CI (`.github/workflows/ci.yml`)
+was green on main before deploy: 658 passed, tsc clean, next build ok.
+
+Post-deploy smoke (2026-07-22):
+
+```text
+/health                -> {"status":"ok"}
+live guest Q&A         -> real Gemini turn returned
+gemini_token_usage     -> visible in Cloud Logging (metering live in prod;
+                          ~4,000 Flash tokens per real Q&A turn)
+5xx after deploy       -> none
+```
+
+New cost-safety now in production: rate limiting on `/agent/finalize`,
+`/finalize/stream`, `/analysis/requirement` (429 + Retry-After over the cap),
+and per-call token metering including ADK agent reasoning tokens.
+
+Carryover: TC-036 live recovery smoke still not run (needs a throwaway GitHub
+PAT). PDF/DOCX export still unbuilt (Phase 8.2).
 
 ## TC-036 GitHub Issue Relaunch - PENDING LIVE SMOKE
 

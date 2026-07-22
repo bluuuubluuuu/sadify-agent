@@ -1,8 +1,27 @@
 # TC-027 MVP Two-Service Deployed Smoke
 
 Date Created: 2026-05-11
-Last Updated: 2026-06-03
-Status: Passed (2026-06-03)
+Last Updated: 2026-07-22
+Status: Passed (2026-06-03); redeployed 2026-07-22 (revisions sadify-api-00010-m9c / sadify-web-00005-499)
+
+## Redeploy 2026-07-22 (Phase 8.1)
+
+After merging main to current (18 commits ahead of the 2026-06-04 revisions)
+and adding CI, both services were redeployed from Google Cloud Shell. Same
+service names, same URLs, new revisions:
+
+- `sadify-api` -> `sadify-api-00010-m9c` (was `sadify-api-00005-pc2`)
+- `sadify-web` -> `sadify-web-00005-499` (was `sadify-web-00002-vzw`)
+
+CI green on main before deploy (658 passed, tsc clean, next build ok). Smoke:
+
+- `GET /health` -> `{"status":"ok","service":"sadify-api",...}`
+- Live guest Q&A returned a real Gemini turn.
+- `gemini_token_usage` lines present in Cloud Logging (~4,000 Flash tokens per
+  real Q&A turn) - confirms the new token metering shipped.
+- Zero 5xx in Cloud Logging after deploy.
+- Rate-limit smoke: pending clean confirmation (per-instance limiter; a burst
+  from one client may distribute across Cloud Run instances).
 
 ## Purpose
 
