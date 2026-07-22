@@ -19,6 +19,13 @@ from sadify_api.agent.tools import (
     build_agent_tool_functions,
     build_agent_tools,
 )
+from sadify_api.services.gemini_structured import log_adk_event_usage
+
+
+def _model_name(model: object) -> str:
+    if isinstance(model, str):
+        return model
+    return getattr(model, "model", model.__class__.__name__)
 
 FinalizeStatus = Literal["asked_clarification", "awaiting_approval", "completed"]
 REGENERATE_CAP = 2
@@ -70,6 +77,7 @@ def run_finalize(
             session_id=analysis_session_id,
             new_message=_finalize_message(deps, analysis_session_id, approval),
         ):
+            log_adk_event_usage(_model_name(model), event)
             for function_response in event.get_function_responses():
                 response = dict(function_response.response or {})
                 tool_results.append((function_response.name, response))
@@ -200,6 +208,7 @@ def stream_finalize_events(
             session_id=analysis_session_id,
             new_message=_finalize_message(deps, analysis_session_id, None),
         ):
+            log_adk_event_usage(_model_name(model), event)
             for function_response in event.get_function_responses():
                 response = dict(function_response.response or {})
                 tool_results.append((function_response.name, response))

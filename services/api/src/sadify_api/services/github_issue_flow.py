@@ -35,7 +35,10 @@ from sadify_api.schemas import (
 )
 from sadify_api.services.drive_repo import DriveRepoRepositoryProtocol
 from sadify_api.services.dev_tasks import DevTaskGroundingError, extract_dev_tasks
-from sadify_api.services.gemini_structured import DevTaskExtractionModel
+from sadify_api.services.gemini_structured import (
+    DevTaskExtractionModel,
+    log_adk_event_usage,
+)
 from sadify_api.services.github_issue_sets import GithubIssueSetRepositoryProtocol
 from sadify_api.services.projects import validate_github_repo
 from sadify_api.services.sad_preview import SadPreviewRepository
@@ -434,6 +437,10 @@ def run_github_issue_prepare_agent(
             session_id=session_id,
             new_message=_github_issue_prepare_message(repo=repo, issues=issues),
         ):
+            log_adk_event_usage(
+                model if isinstance(model, str) else getattr(model, "model", "adk"),
+                event,
+            )
             for function_response in event.get_function_responses():
                 if function_response.name == CREATE_GITHUB_ISSUES:
                     responses.append(

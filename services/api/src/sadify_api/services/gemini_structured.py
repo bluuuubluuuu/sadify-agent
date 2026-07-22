@@ -500,16 +500,35 @@ def _log_token_usage(model: str, response: object) -> None:
     generation.
     """
     usage = getattr(response, "usage_metadata", None)
+    _emit_usage(model, "structured", usage)
+
+
+def log_adk_event_usage(model: str, event: object) -> None:
+    """Log token usage carried on an ADK Runner event.
+
+    The ADK agent makes its own reasoning LLM call (tool selection), which does
+    NOT flow through _generate_content_with_model_fallback, so its tokens are
+    invisible to _log_token_usage. ADK attaches usage_metadata to the events it
+    yields; log it in the same gemini_token_usage vocabulary (source=adk) so a
+    finalize run's true cost is the sum of every gemini_token_usage line.
+    Never raises.
+    """
+    _emit_usage(model, "adk", getattr(event, "usage_metadata", None))
+
+
+def _emit_usage(model: str, source: str, usage: object) -> None:
     if usage is None:
         return
     try:
         logger.info(
-            "gemini_token_usage model=%s prompt_tokens=%s output_tokens=%s "
-            "total_tokens=%s",
+            "gemini_token_usage model=%s source=%s prompt_tokens=%s "
+            "output_tokens=%s total_tokens=%s thoughts_tokens=%s",
             model,
+            source,
             getattr(usage, "prompt_token_count", None),
             getattr(usage, "candidates_token_count", None),
             getattr(usage, "total_token_count", None),
+            getattr(usage, "thoughts_token_count", None),
         )
     except Exception:  # pragma: no cover - logging must never break generation
         pass
