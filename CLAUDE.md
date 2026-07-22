@@ -119,34 +119,39 @@ Phase 8 - Product restructure (ACTIVE, from 2026-07-20): see below.
 Current stop point:
 
 ```text
-Worktree: D:\GoogleCloudHack\.worktrees\mvp-monorepo-scaffold
-Branch:   codex/mvp-monorepo-scaffold  (14 commits ahead of main)
-Last commit: 2026-06-19.
+main is current. The worktree branch codex/mvp-monorepo-scaffold and the
+docs branch chore/track-planning-docs both merged (PR #2, PR #1) on
+2026-07-22. Nothing is ahead of main.
 
-Verified state at that commit:
-  652 passed, 4 skipped (pytest)
+Verified state on main:
+  658 passed, 4 skipped (pytest) - green in CI, not just locally
   npx tsc --noEmit passed
   npm run build passed
+  CI (.github/workflows/ci.yml) gates every PR on these three.
 
-Deployed state (STALE - predates the last 14 commits):
-  sadify-api  -> sadify-api-00005-pc2   (2026-06-04)
-  sadify-web  -> sadify-web-00002-vzw   (2026-06-04)
+Deployed state (CURRENT as of 2026-07-22 - main is live):
+  sadify-api  -> sadify-api-00010-m9c   (2026-07-22)
+  sadify-web  -> sadify-web-00005-499   (2026-07-22)
   Region asia-southeast1, runtime SA sadify-agent-sa, scale-to-zero.
+  Post-deploy smoke: /health ok, live guest Q&A, gemini_token_usage
+  visible in Cloud Logging, zero 5xx.
 
 Known open items:
   TC-036 live recovery smoke not run (needs throwaway GitHub PAT).
   PDF export not built. DOCX export not built. Both are stated MVP
-    success criteria in 01_product_scope.md.
-  No CI. Every deploy is a manual gcloud run deploy.
-  Dangling stash on main; 5 untracked test-source files in tests/.
+    success criteria in 01_product_scope.md. This is Phase 8.2.
+  Rate limit is per-instance (in-memory); a global cap would need a
+    shared store. Adequate at scale-to-zero, revisit before real load.
+  Cost baseline: ~4,000 Flash tokens per Q&A turn in production; a full
+    agent finalize adds ~6,000 ADK reasoning tokens (~25% of the run).
 ```
 
 Phase 8 order of work (agreed 2026-07-20):
 
 ```text
-8.1  Repo hygiene: correct the stale docs, merge the worktree branch into
-     main, retire hackathon-era gates, deploy the 14 unshipped commits,
-     add CI over the existing 652 tests + tsc + build.
+8.1  DONE (2026-07-22). Repo hygiene: stale docs corrected, worktree +
+     docs branches merged to main, hackathon-era gates retired, CI added
+     over 658 tests + tsc + build, main deployed to Cloud Run and smoked.
 8.2  Close the MVP promise: PDF export, DOCX export.
 8.3  First-run path so a user who is not the author can reach a SAD.
 ```
