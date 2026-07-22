@@ -46,6 +46,11 @@ from sadify_api.services.session_state import (
     SessionSnapshotRepository,
 )
 from sadify_api.services.projects import FirestoreProjectRepository, ProjectRepository
+from sadify_api.services.rate_limit import (
+    RateLimitRule,
+    SlidingWindowRateLimiter,
+    rate_limit_dependency,
+)
 from sadify_api.services.wiki_state import (
     FirestoreWikiStateRepository,
     WikiStateRepository,
@@ -116,6 +121,13 @@ def create_app(
         if firestore_client is not None
         else GithubIssueSetRepository()
     )
+    model_route_limiter = SlidingWindowRateLimiter(
+        RateLimitRule(
+            max_requests=config.model_route_rate_limit,
+            window_seconds=config.model_route_rate_window_seconds,
+        )
+    )
+    model_route_rate_limit = rate_limit_dependency(model_route_limiter)
     app = FastAPI(title="SADify API", version="0.1.0")
     app.add_middleware(
         CORSMiddleware,
@@ -144,11 +156,18 @@ def create_app(
             sad_review_model=sad_review_model,
             dev_task_model=dev_task_model,
             github_issue_set_repository=github_issue_set_repository,
+            rate_limit=model_route_rate_limit,
         )
     )
     app.include_router(create_auth_router(token_verifier))
     app.include_router(create_drafts_router(draft_repository, token_verifier))
-    app.include_router(create_analysis_router(analysis_model, analysis_repository))
+    app.include_router(
+        create_analysis_router(
+            analysis_model,
+            analysis_repository,
+            rate_limit=model_route_rate_limit,
+        )
+    )
     app.include_router(create_sources_router(source_repository))
     app.include_router(
         create_drive_router(

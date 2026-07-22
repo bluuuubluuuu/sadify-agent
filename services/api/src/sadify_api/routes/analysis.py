@@ -1,6 +1,6 @@
 import logging
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 
 from sadify_api.schemas import (
     QuestionnairePlanSlotPointer,
@@ -84,10 +84,16 @@ def _call_analysis_model(
 def create_analysis_router(
     model: RequirementAnalysisModel,
     repository: RequirementAnalysisRepository,
+    rate_limit=None,
 ) -> APIRouter:
     router = APIRouter(prefix="/analysis", tags=["analysis"])
+    route_dependencies = [Depends(rate_limit)] if rate_limit is not None else []
 
-    @router.post("/requirement", response_model=RequirementAnalysisApiResponse)
+    @router.post(
+        "/requirement",
+        response_model=RequirementAnalysisApiResponse,
+        dependencies=route_dependencies,
+    )
     def analyze_requirement(
         request: RequirementAnalysisRequest,
     ) -> RequirementAnalysisApiResponse:

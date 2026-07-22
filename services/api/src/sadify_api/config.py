@@ -21,6 +21,10 @@ class ApiConfig:
     persistence_mode: Literal["memory", "firestore"] = "memory"
     github_mcp_enabled: bool = False
     github_repo: str = ""
+    # Cost-safety throttle on guest-open, model-heavy routes. Per-client,
+    # per-instance sliding window. See services/rate_limit.py.
+    model_route_rate_limit: int = 20
+    model_route_rate_window_seconds: int = 60
 
 
 def load_api_config() -> ApiConfig:
@@ -72,6 +76,10 @@ def load_api_config() -> ApiConfig:
         persistence_mode=persistence_mode,
         github_mcp_enabled=_env_bool("SADIFY_GITHUB_MCP_ENABLED", default=False),
         github_repo=os.getenv("SADIFY_GITHUB_REPO", "").strip(),
+        model_route_rate_limit=_env_int("SADIFY_MODEL_ROUTE_RATE_LIMIT", default=20),
+        model_route_rate_window_seconds=_env_int(
+            "SADIFY_MODEL_ROUTE_RATE_WINDOW_SECONDS", default=60
+        ),
     )
 
 
@@ -81,6 +89,16 @@ def _env_bool(name: str, *, default: bool) -> bool:
         return default
 
     return raw_value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _env_int(name: str, *, default: int) -> int:
+    raw_value = os.getenv(name)
+    if raw_value is None:
+        return default
+    try:
+        return int(raw_value.strip())
+    except ValueError:
+        return default
 
 
 def _env_list(name: str, *, default: tuple[str, ...]) -> tuple[str, ...]:

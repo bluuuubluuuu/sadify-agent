@@ -1,7 +1,10 @@
 from collections.abc import Callable
+import logging
 from typing import Protocol
 
 from sadify_api.config import ApiConfig
+
+logger = logging.getLogger(__name__)
 from sadify_api.schemas import (
     DevTaskExtractionResponse,
     RequirementAnalysisResponse,
@@ -467,20 +470,49 @@ def _generate_content_with_model_fallback(
 ) -> object:
     selected_model = resolve_gemini_model(requested_model, config)
     try:
-        return client.models.generate_content(
+        response = client.models.generate_content(
             model=selected_model,
             contents=contents,
             config=_build_generation_config(selected_model, response_schema),
         )
+        _log_token_usage(selected_model, response)
+        return response
     except Exception as exc:
         default_model = backend_default_model(config)
         if selected_model == default_model or not _is_model_unavailable_error(exc):
             raise
-        return client.models.generate_content(
+        response = client.models.generate_content(
             model=default_model,
             contents=contents,
             config=_build_generation_config(default_model, response_schema),
         )
+        _log_token_usage(default_model, response)
+        return response
+
+
+def _log_token_usage(model: str, response: object) -> None:
+    """Emit per-call token counts so cost-per-SAD is measurable in logs.
+
+    One SAD fans out into several model calls (per-turn analysis, preview,
+    self-review, up to two regenerations, dev-task extraction). Grep these
+    lines for an analysis/session id in the surrounding log context to sum a
+    document's true token cost. Never raises — instrumentation must not break
+    generation.
+    """
+    usage = getattr(response, "usage_metadata", None)
+    if usage is None:
+        return
+    try:
+        logger.info(
+            "gemini_token_usage model=%s prompt_tokens=%s output_tokens=%s "
+            "total_tokens=%s",
+            model,
+            getattr(usage, "prompt_token_count", None),
+            getattr(usage, "candidates_token_count", None),
+            getattr(usage, "total_token_count", None),
+        )
+    except Exception:  # pragma: no cover - logging must never break generation
+        pass
 
 
 class GeminiRequirementAnalysisModel:

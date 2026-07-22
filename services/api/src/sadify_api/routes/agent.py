@@ -1,6 +1,6 @@
 import json
 
-from fastapi import APIRouter, Header, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException
 from fastapi.responses import StreamingResponse
 
 from sadify_api.agent.approval import ApprovalStore, ApprovalTokenInvalidError
@@ -65,13 +65,19 @@ def create_agent_router(
     dev_task_model: DevTaskExtractionModel | None = None,
     approval_store: ApprovalStore | None = None,
     github_issue_set_repository: GithubIssueSetRepositoryProtocol | None = None,
+    rate_limit=None,
 ) -> APIRouter:
     router = APIRouter(prefix="/agent", tags=["agent"])
     approval_store = approval_store or ApprovalStore()
     if github_issue_set_repository is None:
         raise ValueError("github_issue_set_repository is required")
+    finalize_dependencies = [Depends(rate_limit)] if rate_limit is not None else []
 
-    @router.post("/finalize", response_model=AgentFinalizeResponse)
+    @router.post(
+        "/finalize",
+        response_model=AgentFinalizeResponse,
+        dependencies=finalize_dependencies,
+    )
     def finalize(request: AgentFinalizeRequest) -> AgentFinalizeResponse:
         resolved_model = resolve_gemini_model(request.model, config)
         return AgentFinalizeResponse.model_validate(
@@ -83,7 +89,7 @@ def create_agent_router(
             )
         )
 
-    @router.post("/finalize/stream")
+    @router.post("/finalize/stream", dependencies=finalize_dependencies)
     def finalize_stream(request: AgentFinalizeRequest) -> StreamingResponse:
         resolved_model = resolve_gemini_model(request.model, config)
 
