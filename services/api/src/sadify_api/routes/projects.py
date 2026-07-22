@@ -1,4 +1,5 @@
-from fastapi import APIRouter, Header, HTTPException
+from fastapi import APIRouter, Header, HTTPException, Response
+from fastapi.responses import JSONResponse
 
 from sadify_api.config import ApiConfig, load_api_config
 from sadify_api.routes.auth import verify_authorization_header
@@ -6,6 +7,7 @@ from sadify_api.schemas import (
     CreateProjectRequest,
     CreateProjectResponse,
     ProjectListResponse,
+    ProjectSessionSnapshot,
     ProjectSavesResponse,
     ProjectSummary,
     SadSaveSummary,
@@ -17,9 +19,14 @@ from sadify_api.services.auth import TokenVerifier
 from sadify_api.services.drive_client import (
     DriveClient,
     DriveFolderCreateError,
+    DriveFolderTrashError,
     DriveTokenInvalidError,
 )
 from sadify_api.services.drive_repo import DriveRepoRepository
+from sadify_api.services.github_issue_sets import (
+    GithubIssueSetRepository,
+    GithubIssueSetRepositoryProtocol,
+)
 from sadify_api.services.projects import (
     ProjectRepository,
     validate_github_repo,
@@ -27,6 +34,7 @@ from sadify_api.services.projects import (
 )
 from sadify_api.services.sad_save import SadSaveRepository
 from sadify_api.services.secret_store import SecretStore, get_secret_store
+from sadify_api.services.session_state import SessionSnapshotRepository
 
 
 def create_projects_router(
@@ -37,8 +45,16 @@ def create_projects_router(
     config: ApiConfig | None = None,
     drive_client: DriveClient | None = None,
     secret_store: SecretStore | None = None,
+    session_snapshot_repository: SessionSnapshotRepository | None = None,
+    github_issue_set_repository: GithubIssueSetRepositoryProtocol | None = None,
 ) -> APIRouter:
     config = config or load_api_config()
+    session_snapshot_repository = (
+        session_snapshot_repository or SessionSnapshotRepository()
+    )
+    github_issue_set_repository = (
+        github_issue_set_repository or GithubIssueSetRepository()
+    )
     router = APIRouter(prefix="/projects", tags=["projects"])
 
     @router.get("", response_model=ProjectListResponse)
@@ -156,6 +172,13 @@ def create_projects_router(
             grant_id=repo.grant_id,
             project_id=project.project_id,
         )
+        prepared_save_ids = {
+            issue_set.save_id
+            for issue_set in github_issue_set_repository.list_for_project(
+                repo.grant_id,
+                project.project_id,
+            )
+        }
         return ProjectSavesResponse(
             project_id=project.project_id,
             project_name=project.name,
@@ -173,9 +196,106 @@ def create_projects_router(
                         if artifact.source_ids
                     ],
                     created_at=record.created_at,
+                    has_github_issue_set=record.save_id in prepared_save_ids,
                 )
                 for record in records
             ],
+        )
+
+    @router.put("/{project_id}/session", status_code=204)
+    def put_project_session(
+        project_id: str,
+        snapshot: ProjectSessionSnapshot,
+        authorization: str | None = Header(default=None),
+    ) -> Response:
+        user = _verified_user(authorization, token_verifier)
+        repo = _active_repo_or_error(drive_repo_repository, user.uid)
+        if project_repository.get_project(repo.grant_id, project_id) is None:
+            raise _project_error(
+                404,
+                "PROJECT_NOT_FOUND",
+                "Project not found in this Drive repo.",
+            )
+        session_snapshot_repository.upsert(repo.grant_id, project_id, snapshot)
+        return Response(status_code=204)
+
+    @router.get("/{project_id}/session")
+    def get_project_session(
+        project_id: str,
+        authorization: str | None = Header(default=None),
+    ) -> Response:
+        user = _verified_user(authorization, token_verifier)
+        repo = _active_repo_or_error(drive_repo_repository, user.uid)
+        if project_repository.get_project(repo.grant_id, project_id) is None:
+            raise _project_error(
+                404,
+                "PROJECT_NOT_FOUND",
+                "Project not found in this Drive repo.",
+            )
+        snapshot = session_snapshot_repository.get(repo.grant_id, project_id)
+        if snapshot is None:
+            return Response(status_code=204)
+        return JSONResponse(content=snapshot.model_dump(mode="json"))
+
+    @router.delete("/{project_id}", response_model=ProjectListResponse)
+    def delete_project(
+        project_id: str,
+        authorization: str | None = Header(default=None),
+    ) -> ProjectListResponse:
+        user = _verified_user(authorization, token_verifier)
+        repo = _active_repo_or_error(drive_repo_repository, user.uid)
+        project = project_repository.get_project(repo.grant_id, project_id)
+        if project is None:
+            raise _project_error(
+                404,
+                "PROJECT_NOT_FOUND",
+                "Project not found in this Drive repo.",
+            )
+
+        if config.drive_mode == "live" and not project.drive_folder_id.startswith(
+            "LOCAL-"
+        ):
+            live_drive_client, access_token = _live_drive_context(
+                config=config,
+                drive_client=drive_client,
+                secret_store=secret_store,
+                owner_uid=user.uid,
+            )
+            try:
+                live_drive_client.trash_folder(
+                    access_token,
+                    project.drive_folder_id,
+                )
+            except DriveFolderTrashError as exc:
+                raise _project_error(
+                    502,
+                    "PROJECT_DELETE_DRIVE_FAILED",
+                    "Could not move the project folder to Drive Trash.",
+                ) from exc
+
+        try:
+            sad_save_repository.delete_for_project(repo.grant_id, project_id)
+            session_snapshot_repository.delete(repo.grant_id, project_id)
+            github_issue_set_repository.delete_for_project(repo.grant_id, project_id)
+            project_repository.delete_project(repo.grant_id, project_id)
+        except Exception as exc:
+            raise _project_error(
+                502,
+                "PROJECT_DELETE_FAILED",
+                "Could not finish deleting the project; retry.",
+            ) from exc
+
+        drive_repo_repository.clear_active_project(repo.grant_id, project_id)
+        projects = project_repository.list_projects(repo.grant_id)
+        drive_repo_repository.set_available_projects(
+            grant_id=repo.grant_id,
+            projects=projects,
+        )
+        refreshed = drive_repo_repository.get_active_repo(user.uid)
+        return ProjectListResponse(
+            active_project_id=(refreshed.active_project_id if refreshed else None),
+            active_project_name=(refreshed.active_project_name if refreshed else None),
+            projects=projects,
         )
 
     @router.post("/{project_id}/github", response_model=ProjectSummary)

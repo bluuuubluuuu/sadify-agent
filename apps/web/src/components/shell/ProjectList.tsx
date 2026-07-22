@@ -20,6 +20,7 @@ export function ProjectList({
   busy,
   historyNode,
   onSwitch,
+  onDelete,
   onNewProject,
 }: {
   projects: ProjectSummary[];
@@ -28,6 +29,7 @@ export function ProjectList({
   busy?: boolean;
   historyNode?: ReactNode;
   onSwitch: (projectId: string) => void;
+  onDelete?: (projectId: string) => void;
   onNewProject: () => void;
 }) {
   return (
@@ -36,7 +38,7 @@ export function ProjectList({
         const isActive = project.project_id === activeProjectId;
         const count = saveCounts?.[project.project_id];
         return (
-          <div key={project.project_id}>
+          <div key={project.project_id} className="projectRow">
             <div className={styles.projLine}>
               <button
                 type="button"
@@ -46,6 +48,7 @@ export function ProjectList({
                 disabled={busy}
                 aria-current={isActive ? "true" : undefined}
                 onClick={() => onSwitch(project.project_id)}
+                title={project.name}
               >
                 <Icon name="folder" size={18} color="#fff" />
                 <span className={styles.projName}>{project.name}</span>
@@ -53,6 +56,20 @@ export function ProjectList({
                   <span className={styles.projCount}>{count} saves</span>
                 ) : null}
               </button>
+              {onDelete ? (
+                <button
+                  type="button"
+                  className="projectDeleteButton"
+                  disabled={busy}
+                  aria-label={`Delete project ${project.name}`}
+                  title={`Delete project ${project.name}`}
+                  onClick={() => onDelete(project.project_id)}
+                >
+                  <span aria-hidden="true">&#128465;</span>
+                </button>
+              ) : null}
+            </div>
+            <div className="projectRowActions">
               <a
                 className={styles.projectRepoLink}
                 href={projectRepoUrl(project.drive_folder_id)}
@@ -86,6 +103,44 @@ export function ProjectList({
         <Icon name="plus" size={16} color="#bfdbfe" />
         New project
       </button>
+      <style jsx>{`
+        .projectRowActions {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          margin: 9px 0 5px 8px;
+        }
+        .projectDeleteButton {
+          width: 34px;
+          min-width: 34px;
+          border: 1px solid rgba(252, 165, 165, 0.48);
+          border-radius: var(--r-sm);
+          background: rgba(127, 29, 29, 0.22);
+          color: #fecaca;
+          cursor: pointer;
+          font: inherit;
+          font-size: 16px;
+          transition: opacity var(--motion-fast), background var(--motion-fast);
+        }
+        .projectDeleteButton:hover,
+        .projectDeleteButton:focus-visible {
+          background: rgba(185, 28, 28, 0.5);
+          outline: none;
+        }
+        .projectDeleteButton:disabled {
+          cursor: default;
+          opacity: 0.45;
+        }
+        @media (hover: hover) {
+          .projectDeleteButton {
+            opacity: 0;
+          }
+          .projectRow:hover .projectDeleteButton,
+          .projectRow:focus-within .projectDeleteButton {
+            opacity: 1;
+          }
+        }
+      `}</style>
     </>
   );
 }

@@ -66,6 +66,8 @@ class DriveRepoRepositoryProtocol(Protocol):
         updated_at: datetime | None = None,
     ) -> DriveRepoRecord: ...
 
+    def clear_active_project(self, grant_id: str, project_id: str) -> None: ...
+
 DEFAULT_PROJECT_REPO_STRUCTURE = [
     DriveRepoFolder(
         name="Sources",
@@ -288,6 +290,18 @@ class DriveRepoRepository:
         self._records[grant_id] = updated
         return updated
 
+    def clear_active_project(self, grant_id: str, project_id: str) -> None:
+        record = self._records.get(grant_id)
+        if record is None or record.active_project_id != project_id:
+            return
+        self._records[grant_id] = record.model_copy(
+            update={
+                "active_project_id": None,
+                "active_project_name": None,
+                "updated_at": datetime.now(UTC),
+            }
+        )
+
 
 class FirestoreDriveRepoRepository:
     def __init__(self, client) -> None:
@@ -504,6 +518,19 @@ class FirestoreDriveRepoRepository:
         )
         self._store_record(updated, active=self._is_active(grant_id))
         return updated
+
+    def clear_active_project(self, grant_id: str, project_id: str) -> None:
+        record = self._get_by_grant_id(grant_id)
+        if record is None or record.active_project_id != project_id:
+            return
+        updated = record.model_copy(
+            update={
+                "active_project_id": None,
+                "active_project_name": None,
+                "updated_at": datetime.now(UTC),
+            }
+        )
+        self._store_record(updated, active=self._is_active(grant_id))
 
     def _store_record(self, record: DriveRepoRecord, *, active: bool) -> None:
         self._repo_ref(record.grant_id).set(

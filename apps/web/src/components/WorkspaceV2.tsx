@@ -3,11 +3,15 @@
 import { onAuthStateChanged } from "firebase/auth";
 import { useEffect, useRef, useState } from "react";
 import {
+  deleteProject,
   getDriveRepoStatus,
   setProjectGithubRepo,
   type CreateProjectResponse,
   type DriveRepoRecord,
   type ModelCatalogResponse,
+  type ProjectSessionSnapshot,
+  type ProjectSummary,
+  type SadSaveSummary,
   type SourceRecord,
 } from "../lib/api";
 import { getFirebaseAuth } from "../lib/firebaseClient";
@@ -19,12 +23,15 @@ import { useSources } from "../lib/hooks/useSources";
 import { useQnA } from "../lib/hooks/useQnA";
 import { useSadSave } from "../lib/hooks/useSadSave";
 import { useModelCatalog } from "../lib/hooks/useModelCatalog";
+import { useProjectSession } from "../lib/hooks/useProjectSession";
 import { useAgentFinalize } from "../lib/hooks/useAgentFinalize";
 import { useAgentGithubIssues } from "../lib/hooks/useAgentGithubIssues";
+import { shouldWriteSnapshot } from "../lib/sessionSnapshot";
 import { AppShell } from "./shell/AppShell";
 import { Sidebar } from "./shell/Sidebar";
 import { ConnectDriveBanner } from "./shell/ConnectDriveBanner";
 import { CreateProjectDialog } from "./shell/CreateProjectDialog";
+import { ConfirmDialog } from "./shell/ConfirmDialog";
 import { ChatPanel } from "./chat/ChatPanel";
 import { ModelPicker } from "./chat/ModelPicker";
 import { ReadinessPane, PreviewPlaceholder } from "./chat/ReadinessPane";
@@ -49,13 +56,29 @@ export function WorkspaceV2() {
   const [historyRefreshKey, setHistoryRefreshKey] = useState(0);
   const [analysisSessionId, setAnalysisSessionId] = useState(() => crypto.randomUUID());
   const [startText, setStartText] = useState("");
+  const [restoredSourceContext, setRestoredSourceContext] = useState("");
+  const [restoredSourceReferences, setRestoredSourceReferences] = useState<string[]>([]);
+  const [deletingProject, setDeletingProject] = useState<ProjectSummary | null>(null);
+  const [deleteBusy, setDeleteBusy] = useState(false);
+  const [deleteError, setDeleteError] = useState("");
+  const activeProjectRef = useRef<string | null>(null);
+  const restoringRef = useRef(false);
+  const pendingModelRef = useRef<string | null>(null);
 
   const models = useModelCatalog();
   const sources = useSources();
+  const session = useProjectSession();
   const driveActions = useDriveRepo(setDriveRepo);
+  const activeProjectId = driveRepo?.active_project_id ?? null;
+  const effectiveSourceContext = sources.files.length
+    ? sources.analysisContext
+    : restoredSourceContext;
+  const effectiveSourceReferences = sources.files.length
+    ? sources.sourceReferences
+    : restoredSourceReferences;
   const qna = useQnA({
-    sourceContext: sources.analysisContext,
-    sourceReferences: sources.sourceReferences,
+    sourceContext: effectiveSourceContext,
+    sourceReferences: effectiveSourceReferences,
     analysisSessionId,
     selectedModel: models.isLoaded ? models.selectedModel : undefined,
     onAnalysisSaved: () => {},
@@ -78,11 +101,46 @@ export function WorkspaceV2() {
     });
   }
 
+  async function handleDeleteProject() {
+    const project = deletingProject;
+    const user = getFirebaseAuth().currentUser;
+    if (!project || !user) {
+      return;
+    }
+
+    const deletedActiveProject =
+      project.project_id === driveRepo?.active_project_id;
+    setDeleteBusy(true);
+    setDeleteError("");
+    try {
+      const idToken = await user.getIdToken();
+      await deleteProject(idToken, project.project_id);
+      const updatedRepo = await getDriveRepoStatus(idToken);
+      setDriveRepo(updatedRepo);
+      setDeletingProject(null);
+      if (deletedActiveProject) {
+        session.cancel();
+        qna.reset();
+        sources.reset();
+        sadSave.dismissPreview();
+        setStartText("");
+        setRestoredSourceContext("");
+        setRestoredSourceReferences([]);
+      }
+    } catch (caught) {
+      setDeleteError(
+        caught instanceof Error ? caught.message : "Could not delete this project.",
+      );
+    } finally {
+      setDeleteBusy(false);
+    }
+  }
+
   const sadSave = useSadSave({
     requirementText: qna.requirementText,
     analysisResponse: qna.analysisResponse,
-    sourceContext: sources.analysisContext,
-    sourceReferences: sources.sourceReferences,
+    sourceContext: effectiveSourceContext,
+    sourceReferences: effectiveSourceReferences,
     selectedModel: models.isLoaded ? models.selectedModel : undefined,
     onProjectCreated: handleProjectCreated,
     onHistoryRefresh: () => setHistoryRefreshKey((key) => key + 1),
@@ -105,6 +163,7 @@ export function WorkspaceV2() {
   const [githubConnectOpen, setGithubConnectOpen] = useState(false);
   const [githubConnectBusy, setGithubConnectBusy] = useState(false);
   const [githubConnectError, setGithubConnectError] = useState("");
+  const [githubResumeRepo, setGithubResumeRepo] = useState<string | null>(null);
 
   const activeProject =
     driveRepo?.available_projects.find(
@@ -114,7 +173,7 @@ export function WorkspaceV2() {
 
   function handlePrepareGithubIssues() {
     if (activeGithubRepo && githubIssues.hasToken) {
-      githubIssues.prepare(sadSave.previewId, activeGithubRepo);
+      githubIssues.prepare(sadSave.record?.save_id ?? null, activeGithubRepo);
       return;
     }
     setGithubConnectError("");
@@ -122,6 +181,15 @@ export function WorkspaceV2() {
   }
 
   async function handleGithubConnect(token: string, repo: string) {
+    if (githubResumeRepo) {
+      githubIssues.setGithubToken(token);
+      setGithubConnectOpen(false);
+      setGithubResumeRepo(null);
+      // Reopen the approval card now that the token is set, so the user lands
+      // straight on "Approve & create issues".
+      githubIssues.open();
+      return;
+    }
     const projectId = driveRepo?.active_project_id;
     const user = getFirebaseAuth().currentUser;
     if (!projectId || !user) {
@@ -145,13 +213,32 @@ export function WorkspaceV2() {
       );
       githubIssues.setGithubToken(token);
       setGithubConnectOpen(false);
-      githubIssues.prepare(sadSave.previewId, updated.github_repo);
+      githubIssues.prepare(sadSave.record?.save_id ?? null, updated.github_repo);
     } catch (caught) {
       setGithubConnectError(
         caught instanceof Error ? caught.message : "Could not link the GitHub repository.",
       );
     } finally {
       setGithubConnectBusy(false);
+    }
+  }
+
+  async function handleResumeGithubIssues(save: SadSaveSummary) {
+    const result = await githubIssues.relaunch(save.save_id);
+    const lockedRepo = result?.repo;
+    if (!lockedRepo) {
+      return;
+    }
+    if (!githubIssues.hasToken) {
+      // Token-first: hide the approval card while the (repo-locked) token modal
+      // is shown, then reopen it once the token is pasted. Avoids stacking the
+      // token modal behind the approval card.
+      githubIssues.close();
+      setGithubResumeRepo(lockedRepo);
+      setGithubConnectError("");
+      setGithubConnectOpen(true);
+    } else {
+      setGithubResumeRepo(null);
     }
   }
 
@@ -180,6 +267,136 @@ export function WorkspaceV2() {
     setAnalysisSessionId(crypto.randomUUID());
   }, [sources.sourceReferences.join(","), driveRepo?.active_project_id]);
 
+  useEffect(() => {
+    session.cancel();
+    const previousProjectId = activeProjectRef.current;
+    activeProjectRef.current = activeProjectId;
+    pendingModelRef.current = null;
+    setRestoredSourceContext("");
+    setRestoredSourceReferences([]);
+
+    const switchedProjects =
+      previousProjectId !== null && previousProjectId !== activeProjectId;
+    if (switchedProjects) {
+      qna.reset();
+      sources.reset();
+      setStartText("");
+    }
+
+    if (!auth.isSignedIn || !activeProjectId) {
+      restoringRef.current = false;
+      return session.cancel;
+    }
+
+    restoringRef.current = true;
+    void session
+      .restore(activeProjectId)
+      .then((result) => {
+        if (result.projectId !== activeProjectRef.current) {
+          return;
+        }
+        const snapshot = result.snapshot;
+        if (!snapshot) {
+          return;
+        }
+        qna.hydrate({
+          requirementText: snapshot.clean_requirement_text,
+          analysisResponse: snapshot.analysis_response,
+          answerHistory: snapshot.answer_history,
+        });
+        setStartText(snapshot.clean_requirement_text);
+        setRestoredSourceContext(snapshot.source_context);
+        setRestoredSourceReferences(snapshot.source_references);
+
+        pendingModelRef.current = snapshot.selected_model;
+        if (
+          snapshot.selected_model &&
+          models.isLoaded &&
+          models.catalog.models.some((model) => model.id === snapshot.selected_model)
+        ) {
+          models.setSelectedModel(snapshot.selected_model);
+          pendingModelRef.current = null;
+        }
+      })
+      .catch((error) => {
+        if (activeProjectRef.current !== activeProjectId) {
+          return;
+        }
+        qna.reset();
+        setStartText("");
+        setRestoredSourceContext("");
+        setRestoredSourceReferences([]);
+        console.warn("Could not restore the project session snapshot.", error);
+      })
+      .finally(() => {
+        if (activeProjectRef.current === activeProjectId) {
+          restoringRef.current = false;
+        }
+      });
+
+    return session.cancel;
+  }, [activeProjectId, auth.isSignedIn]);
+
+  useEffect(() => {
+    const pendingModel = pendingModelRef.current;
+    if (!models.isLoaded || !pendingModel) {
+      return;
+    }
+    pendingModelRef.current = null;
+    if (models.catalog.models.some((model) => model.id === pendingModel)) {
+      models.setSelectedModel(pendingModel);
+    }
+  }, [models.catalog.models, models.isLoaded, models.setSelectedModel]);
+
+  useEffect(() => {
+    if (sources.files.length > 0) {
+      setRestoredSourceContext("");
+      setRestoredSourceReferences([]);
+    }
+  }, [sources.files.length]);
+
+  useEffect(() => {
+    const scheduledProjectId = activeProjectId;
+    if (
+      !shouldWriteSnapshot({
+        isSignedIn: auth.isSignedIn,
+        activeProjectId,
+        scheduledProjectId,
+        hasAnalysis: qna.analysisResponse !== null,
+        restoring: restoringRef.current,
+      }) ||
+      !scheduledProjectId ||
+      !qna.analysisResponse
+    ) {
+      return;
+    }
+
+    const snapshot: ProjectSessionSnapshot = {
+      clean_requirement_text: qna.cleanRequirementText,
+      analysis_response: qna.analysisResponse,
+      answer_history: qna.answerHistory,
+      source_context: effectiveSourceContext,
+      source_references: effectiveSourceReferences,
+      selected_model: models.selectedModel || null,
+      status: "in_progress",
+    };
+    session.writeDebounced(
+      scheduledProjectId,
+      snapshot,
+      (projectId) => projectId === activeProjectRef.current,
+    );
+    return session.cancel;
+  }, [
+    activeProjectId,
+    auth.isSignedIn,
+    effectiveSourceContext,
+    effectiveSourceReferences,
+    models.selectedModel,
+    qna.analysisResponse,
+    qna.answerHistory,
+    qna.cleanRequirementText,
+  ]);
+
   const readinessScore =
     qna.analysis?.questionnaire?.draft_readiness.score ?? qna.analysis?.readiness.score ?? 0;
   const stage = deriveStage({
@@ -201,6 +418,17 @@ export function WorkspaceV2() {
         sources.reset();
         setStartText("");
       }}
+      onDeleteProject={(projectId) => {
+        const project = driveRepo?.available_projects.find(
+          (candidate) => candidate.project_id === projectId,
+        );
+        if (project) {
+          setDeleteError("");
+          setDeletingProject(project);
+        }
+      }}
+      onCreateGithubIssues={(save) => void handleResumeGithubIssues(save)}
+      onSignIn={() => void auth.signIn().catch(() => undefined)}
       onSignOut={() => auth.signOut()}
     />
   );
@@ -303,6 +531,22 @@ export function WorkspaceV2() {
           onCancel={sadSave.cancelProject}
         />
       ) : null}
+      {deletingProject ? (
+        <ConfirmDialog
+          title={`Delete ${deletingProject.name}?`}
+          message={
+            deleteError ||
+            "This removes the project and its saved SAD data. Its Drive folder will move to Trash."
+          }
+          confirmLabel="Delete project"
+          busy={deleteBusy}
+          onConfirm={() => void handleDeleteProject()}
+          onCancel={() => {
+            setDeleteError("");
+            setDeletingProject(null);
+          }}
+        />
+      ) : null}
       {agent.isOpen ? (
         <AgentTimeline
           events={agent.events}
@@ -319,11 +563,15 @@ export function WorkspaceV2() {
       ) : null}
       {githubConnectOpen ? (
         <ConnectGithubModal
-          initialRepo={activeGithubRepo}
+          initialRepo={githubResumeRepo ?? activeGithubRepo}
+          repoLocked={Boolean(githubResumeRepo)}
           busy={githubConnectBusy}
           error={githubConnectError}
           onSubmit={handleGithubConnect}
-          onClose={() => setGithubConnectOpen(false)}
+          onClose={() => {
+            setGithubConnectOpen(false);
+            setGithubResumeRepo(null);
+          }}
         />
       ) : null}
       {githubIssues.isOpen ? (

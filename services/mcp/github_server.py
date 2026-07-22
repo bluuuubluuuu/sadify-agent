@@ -28,6 +28,11 @@ class GitHubIssue(BaseModel):
 
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
+    marker: str = Field(
+        min_length=1,
+        max_length=256,
+        description="Deterministic SADify marker used for retry deduplication.",
+    )
     title: str = Field(
         min_length=1,
         max_length=256,
@@ -76,6 +81,14 @@ class AsyncGitHubClient(Protocol):
 
     async def __aexit__(self, exc_type, exc, traceback) -> object: ...
 
+    async def get(
+        self,
+        url: str,
+        *,
+        headers: dict[str, str],
+        params: dict[str, Any],
+    ) -> Any: ...
+
     async def post(
         self,
         url: str,
@@ -95,7 +108,7 @@ ClientFactory = Callable[[], AsyncGitHubClient]
     annotations={
         "readOnlyHint": False,
         "destructiveHint": False,
-        "idempotentHint": False,
+        "idempotentHint": True,
         "openWorldHint": True,
     },
 )
@@ -162,26 +175,123 @@ async def create_github_issues_payload(
 
     headers = _github_headers(token)
     created: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
     factory = client_factory or _github_client_factory
     async with factory() as client:
+        existing, read_error = await _existing_marked_issues(
+            client,
+            repo=allowed_repo,
+            headers=headers,
+            markers={issue.marker for issue in batch.issues},
+        )
+        if read_error is not None:
+            return _with_progress(
+                read_error,
+                repo=allowed_repo,
+                requested=len(batch.issues),
+                created=created,
+                skipped=skipped,
+            )
         for issue in batch.issues:
+            existing_issue = existing.get(issue.marker)
+            if existing_issue is not None:
+                skipped.append(existing_issue)
+                continue
             response = await client.post(
                 f"{GITHUB_API_BASE_URL}/repos/{allowed_repo}/issues",
                 headers=headers,
                 json=_issue_payload(issue),
             )
             if response.status_code != 201:
-                return _github_api_error(response)
+                return _with_progress(
+                    _github_api_error(response),
+                    repo=allowed_repo,
+                    requested=len(batch.issues),
+                    created=created,
+                    skipped=skipped,
+                )
             payload = response.json()
             created.append(
                 {
                     "number": payload.get("number"),
                     "url": payload.get("html_url"),
                     "title": issue.title,
+                    "marker": issue.marker,
                 }
             )
 
-    return {"status": "created", "repo": allowed_repo, "issues": created}
+    return _with_progress(
+        {"status": "created"},
+        repo=allowed_repo,
+        requested=len(batch.issues),
+        created=created,
+        skipped=skipped,
+    )
+
+
+async def _existing_marked_issues(
+    client: AsyncGitHubClient,
+    *,
+    repo: str,
+    headers: dict[str, str],
+    markers: set[str],
+) -> tuple[dict[str, dict[str, Any]], dict[str, Any] | None]:
+    existing: dict[str, dict[str, Any]] = {}
+    page = 1
+    while True:
+        response = await client.get(
+            f"{GITHUB_API_BASE_URL}/repos/{repo}/issues",
+            headers=headers,
+            params={"state": "all", "per_page": 100, "page": page},
+        )
+        if response.status_code != 200:
+            return existing, _github_api_error(response)
+        payload = response.json()
+        if not isinstance(payload, list):
+            return existing, {
+                "status": "error",
+                "code": "GITHUB_API_RESPONSE_INVALID",
+                "message": "GitHub returned an invalid issue-list response.",
+            }
+        for item in payload:
+            if not isinstance(item, dict) or "pull_request" in item:
+                continue
+            body = item.get("body")
+            if not isinstance(body, str):
+                continue
+            for marker in markers:
+                if marker not in body or marker in existing:
+                    continue
+                existing[marker] = {
+                    "number": item.get("number"),
+                    "url": item.get("html_url"),
+                    "title": item.get("title"),
+                    "marker": marker,
+                }
+        if len(payload) < 100:
+            return existing, None
+        page += 1
+
+
+def _with_progress(
+    result: dict[str, Any],
+    *,
+    repo: str,
+    requested: int,
+    created: list[dict[str, Any]],
+    skipped: list[dict[str, Any]],
+) -> dict[str, Any]:
+    return {
+        **result,
+        "repo": repo,
+        "created_issues": created,
+        "skipped_issues": skipped,
+        "totals": {
+            "requested": requested,
+            "created": len(created),
+            "skipped": len(skipped),
+        },
+    }
 
 
 def _configured_repo() -> str | None:
@@ -234,6 +344,7 @@ def _approval_action(repo: str, issues: list[GitHubIssue]) -> dict[str, Any]:
                 "title": issue.title,
                 "body": issue.body,
                 "labels": list(issue.labels),
+                "marker": issue.marker,
             }
             for issue in issues
         ],

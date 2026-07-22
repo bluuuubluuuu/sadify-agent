@@ -1,7 +1,10 @@
 from collections.abc import Callable
+import logging
 from typing import Protocol
 
 from sadify_api.config import ApiConfig
+
+logger = logging.getLogger(__name__)
 from sadify_api.schemas import (
     DevTaskExtractionResponse,
     RequirementAnalysisResponse,
@@ -467,20 +470,68 @@ def _generate_content_with_model_fallback(
 ) -> object:
     selected_model = resolve_gemini_model(requested_model, config)
     try:
-        return client.models.generate_content(
+        response = client.models.generate_content(
             model=selected_model,
             contents=contents,
             config=_build_generation_config(selected_model, response_schema),
         )
+        _log_token_usage(selected_model, response)
+        return response
     except Exception as exc:
         default_model = backend_default_model(config)
         if selected_model == default_model or not _is_model_unavailable_error(exc):
             raise
-        return client.models.generate_content(
+        response = client.models.generate_content(
             model=default_model,
             contents=contents,
             config=_build_generation_config(default_model, response_schema),
         )
+        _log_token_usage(default_model, response)
+        return response
+
+
+def _log_token_usage(model: str, response: object) -> None:
+    """Emit per-call token counts so cost-per-SAD is measurable in logs.
+
+    One SAD fans out into several model calls (per-turn analysis, preview,
+    self-review, up to two regenerations, dev-task extraction). Grep these
+    lines for an analysis/session id in the surrounding log context to sum a
+    document's true token cost. Never raises — instrumentation must not break
+    generation.
+    """
+    usage = getattr(response, "usage_metadata", None)
+    _emit_usage(model, "structured", usage)
+
+
+def log_adk_event_usage(model: str, event: object) -> None:
+    """Log token usage carried on an ADK Runner event.
+
+    The ADK agent makes its own reasoning LLM call (tool selection), which does
+    NOT flow through _generate_content_with_model_fallback, so its tokens are
+    invisible to _log_token_usage. ADK attaches usage_metadata to the events it
+    yields; log it in the same gemini_token_usage vocabulary (source=adk) so a
+    finalize run's true cost is the sum of every gemini_token_usage line.
+    Never raises.
+    """
+    _emit_usage(model, "adk", getattr(event, "usage_metadata", None))
+
+
+def _emit_usage(model: str, source: str, usage: object) -> None:
+    if usage is None:
+        return
+    try:
+        logger.info(
+            "gemini_token_usage model=%s source=%s prompt_tokens=%s "
+            "output_tokens=%s total_tokens=%s thoughts_tokens=%s",
+            model,
+            source,
+            getattr(usage, "prompt_token_count", None),
+            getattr(usage, "candidates_token_count", None),
+            getattr(usage, "total_token_count", None),
+            getattr(usage, "thoughts_token_count", None),
+        )
+    except Exception:  # pragma: no cover - logging must never break generation
+        pass
 
 
 class GeminiRequirementAnalysisModel:

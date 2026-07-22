@@ -56,9 +56,34 @@ class AgentApproveRequest(ApiModel):
 
 class AgentGitHubIssuesPrepareRequest(ApiModel):
     analysis_session_id: str = Field(min_length=1)
-    preview_id: str = Field(min_length=1)
+    save_id: str = Field(min_length=1)
     repo: str | None = None
     model: str | None = None
+
+
+class AgentGitHubIssuesRelaunchRequest(ApiModel):
+    analysis_session_id: str = Field(min_length=1)
+    save_id: str = Field(min_length=1)
+
+
+class GithubIssueDraft(ApiModel):
+    marker: str = Field(min_length=1)
+    title: str = Field(min_length=1, max_length=256)
+    body: str = Field(min_length=1, max_length=65536)
+    labels: list[str] = Field(default_factory=list, max_length=10)
+
+
+class GithubIssueSet(ApiModel):
+    grant_id: str = Field(min_length=1)
+    project_id: str = Field(min_length=1)
+    save_id: str = Field(min_length=1)
+    preview_id: str = Field(min_length=1)
+    owner_uid: str = Field(min_length=1)
+    repo: str = Field(min_length=3)
+    status: Literal["prepared"] = "prepared"
+    issues: list[GithubIssueDraft] = Field(min_length=1, max_length=20)
+    created_at: datetime
+    updated_at: datetime
 
 
 class AgentGitHubIssuesApproveRequest(ApiModel):
@@ -289,6 +314,17 @@ class RequirementAnalysisApiResponse(ApiModel):
     analysis_id: str
     saved: bool
     analysis: RequirementAnalysisResponse
+
+
+class ProjectSessionSnapshot(ApiModel):
+    clean_requirement_text: str
+    analysis_response: RequirementAnalysisApiResponse | None = None
+    answer_history: list[str] = Field(default_factory=list)
+    source_context: str = ""
+    source_references: list[str] = Field(default_factory=list)
+    selected_model: str | None = None
+    status: Literal["in_progress"] = "in_progress"
+    updated_at: datetime | None = None
 
 
 class ItReadinessCheck(ApiModel):
@@ -616,6 +652,7 @@ class SadSaveSummary(ApiModel):
     change_summary: str
     source_ids: list[str]
     created_at: datetime
+    has_github_issue_set: bool = False
 
 
 class ProjectSavesResponse(ApiModel):

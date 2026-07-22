@@ -33,10 +33,10 @@ def test_github_issue_hook_prepares_then_approves_with_firebase_auth():
     assert "GITHUB_MCP_DISABLED" in hook
     # Per-user: the repo is supplied by the user, no longer a setup blocker.
     assert "GITHUB_REPO_NOT_CONFIGURED" not in hook
-    # Pasted PAT held in memory and sent on approve; repo sent on prepare.
+    # Pasted PAT held in memory and sent on approve; saved SAD + repo sent on prepare.
     assert "setGithubToken" in hook
     assert "githubToken: githubToken || undefined" in hook
-    assert "repo?: string | null" in hook
+    assert "async function prepare(saveId: string | null, repo?: string | null)" in hook
     assert "setSetupNotice" in hook
     assert "setIsPreparing(true)" in hook
 

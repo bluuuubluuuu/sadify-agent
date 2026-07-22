@@ -55,6 +55,12 @@ class ProjectRepositoryProtocol(Protocol):
         self, grant_id: str, project_id: str, repo: str
     ) -> ProjectRecord | None: ...
 
+    def delete_project(
+        self,
+        grant_id: str,
+        project_id: str,
+    ) -> ProjectRecord | None: ...
+
 
 class ProjectRepository:
     def __init__(self) -> None:
@@ -159,6 +165,19 @@ class ProjectRepository:
         updated = record.model_copy(update={"github_repo": repo})
         self._records[(grant_id, project_id)] = updated
         return updated
+
+    def delete_project(
+        self,
+        grant_id: str,
+        project_id: str,
+    ) -> ProjectRecord | None:
+        record = self._records.pop((grant_id, project_id), None)
+        if record is None:
+            return None
+        project_order = self._order_by_grant.get(grant_id)
+        if project_order and project_id in project_order:
+            project_order.remove(project_id)
+        return record
 
     def _next_project_number(self, grant_id: str) -> int:
         value = self._next_project_number_by_grant.get(grant_id, 1)
@@ -312,6 +331,24 @@ class FirestoreProjectRepository:
             return None
         ref.set({"github_repo": repo}, merge=True)
         return _project_from_data({**data, "github_repo": repo})
+
+    def delete_project(
+        self,
+        grant_id: str,
+        project_id: str,
+    ) -> ProjectRecord | None:
+        project_ref = self._project_ref(grant_id, project_id)
+
+        def _delete(transaction) -> ProjectRecord | None:
+            data = snapshot_data(project_ref.get(transaction=transaction))
+            if data is None:
+                return None
+            record = _project_from_data(data)
+            transaction.delete(project_ref)
+            transaction.delete(self._name_index_ref(grant_id, record.name))
+            return record
+
+        return run_in_transaction(self._client, _delete)
 
     def _project_ref(self, grant_id: str, project_id: str):
         return self._client.collection("projects").document(

@@ -5,20 +5,17 @@ import {
   approveAgentGithubIssues,
   BackendApiError,
   prepareAgentGithubIssues,
+  relaunchAgentGithubIssues,
   type AgentEvent,
   type AgentFinalizeStatus,
-  type AgentProposedAction,
+  type AgentGithubIssueResult,
 } from "../api";
 import { getFirebaseAuth } from "../firebaseClient";
 
-type AgentGithubResult = {
-  approval_id?: string;
-  preview_id?: string;
-  repo?: string;
-  proposed_actions?: AgentProposedAction[];
-  issues?: Array<Record<string, unknown>>;
-  [key: string]: unknown;
-};
+export type GithubIssueCompletionFields = Pick<
+  AgentGithubIssueResult,
+  "created_issues" | "skipped_issues" | "totals"
+>;
 
 const SETUP_ERROR_CODES = new Set([
   "GITHUB_MCP_DISABLED",
@@ -35,7 +32,7 @@ export function useAgentGithubIssues({
   const [isOpen, setIsOpen] = useState(false);
   const [events, setEvents] = useState<AgentEvent[]>([]);
   const [status, setStatus] = useState<AgentFinalizeStatus | null>(null);
-  const [result, setResult] = useState<AgentGithubResult | null>(null);
+  const [result, setResult] = useState<AgentGithubIssueResult | null>(null);
   const [isPreparing, setIsPreparing] = useState(false);
   const [isApproving, setIsApproving] = useState(false);
   const [error, setError] = useState("");
@@ -43,27 +40,39 @@ export function useAgentGithubIssues({
   // Pasted PAT — held in memory only for this session, never persisted.
   const [githubToken, setGithubToken] = useState("");
 
-  async function prepare(previewId: string | null, repo?: string | null) {
-    if (!previewId) {
+  async function prepare(saveId: string | null, repo?: string | null) {
+    if (!saveId) {
       setSetupNotice("Generate and save a SAD preview before preparing GitHub issues.");
+      return;
+    }
+    const user = getFirebaseAuth().currentUser;
+    if (!user) {
+      setError("Sign in with Google before creating GitHub issues.");
       return;
     }
     setIsPreparing(true);
     setError("");
     setSetupNotice("");
     try {
-      const response = await prepareAgentGithubIssues({
-        analysisSessionId,
-        previewId,
-        repo: repo ?? undefined,
-        model: selectedModel,
-      });
+      const idToken = await user.getIdToken();
+      const response = await prepareAgentGithubIssues(
+        {
+          analysisSessionId,
+          saveId,
+          repo: repo ?? undefined,
+          model: selectedModel,
+        },
+        idToken,
+      );
       setEvents(response.events);
       setStatus(response.status);
-      setResult((response.result ?? null) as AgentGithubResult | null);
+      setResult((response.result ?? null) as AgentGithubIssueResult | null);
       setIsOpen(true);
     } catch (caught) {
-      if (caught instanceof BackendApiError && SETUP_ERROR_CODES.has(caught.code ?? "")) {
+      if (isAuthError(caught)) {
+        setError("Sign in with Google before creating GitHub issues.");
+        setIsOpen(true);
+      } else if (caught instanceof BackendApiError && SETUP_ERROR_CODES.has(caught.code ?? "")) {
         setSetupNotice(caught.message);
         setIsOpen(false);
       } else {
@@ -72,6 +81,42 @@ export function useAgentGithubIssues({
         );
         setIsOpen(true);
       }
+    } finally {
+      setIsPreparing(false);
+    }
+  }
+
+  async function relaunch(saveId: string): Promise<AgentGithubIssueResult | null> {
+    const user = getFirebaseAuth().currentUser;
+    if (!user) {
+      setError("Sign in with Google before creating GitHub issues.");
+      return null;
+    }
+    setIsPreparing(true);
+    setError("");
+    setSetupNotice("");
+    try {
+      const idToken = await user.getIdToken();
+      const response = await relaunchAgentGithubIssues(
+        { analysisSessionId, saveId },
+        idToken,
+      );
+      const nextResult = (response.result ?? null) as AgentGithubIssueResult | null;
+      setEvents(response.events);
+      setStatus(response.status);
+      setResult(nextResult);
+      setIsOpen(true);
+      return nextResult;
+    } catch (caught) {
+      if (isAuthError(caught)) {
+        setError("Sign in with Google before creating GitHub issues.");
+      } else {
+        setError(
+          caught instanceof Error ? caught.message : "SADify could not relaunch GitHub issues.",
+        );
+      }
+      setIsOpen(true);
+      return null;
     } finally {
       setIsPreparing(false);
     }
@@ -102,7 +147,7 @@ export function useAgentGithubIssues({
       );
       setEvents((previous) => [...previous, ...response.events]);
       setStatus(response.status);
-      setResult((response.result ?? null) as AgentGithubResult | null);
+      setResult((response.result ?? null) as AgentGithubIssueResult | null);
     } catch (caught) {
       if (isAuthError(caught)) {
         setError("Sign in with Google before creating GitHub issues.");
@@ -120,6 +165,10 @@ export function useAgentGithubIssues({
     setIsOpen(false);
   }
 
+  function open() {
+    setIsOpen(true);
+  }
+
   return {
     isOpen,
     events,
@@ -133,8 +182,10 @@ export function useAgentGithubIssues({
     setGithubToken,
     hasToken: githubToken.trim().length > 0,
     prepare,
+    relaunch,
     approve,
     close,
+    open,
   };
 }
 

@@ -14,9 +14,11 @@ function formatSavedAt(value: string) {
 export function SaveHistory({
   saves,
   message,
+  onCreateGithubIssues,
 }: {
   saves: SadSaveSummary[];
   message: string;
+  onCreateGithubIssues?: (save: SadSaveSummary) => void;
 }) {
   if (!saves.length) {
     return <p className={styles.histMsg}>{message}</p>;
@@ -40,6 +42,17 @@ export function SaveHistory({
             </a>
           ) : null}
           <span className={styles.histTime}>{formatSavedAt(save.created_at)}</span>
+          {save.has_github_issue_set && onCreateGithubIssues ? (
+            <button
+              type="button"
+              className={styles.histGithub}
+              aria-label={`Create GitHub issues from ${save.save_id}`}
+              onClick={() => onCreateGithubIssues(save)}
+            >
+              <Icon name="openExternal" size={13} />
+              Create GitHub issues
+            </button>
+          ) : null}
         </li>
       ))}
     </ul>

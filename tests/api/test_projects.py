@@ -4,10 +4,11 @@ from fastapi.testclient import TestClient
 
 from sadify_api.config import ApiConfig
 from sadify_api.main import create_app
-from sadify_api.schemas import SadPreviewResponse
+from sadify_api.schemas import GithubIssueDraft, GithubIssueSet, SadPreviewResponse
 from sadify_api.services.auth import VerifiedFirebaseUser
 from sadify_api.services.drive_client import DriveFolderRef
 from sadify_api.services.drive_repo import DriveRepoRepository
+from sadify_api.services.github_issue_sets import GithubIssueSetRepository
 from sadify_api.services.projects import ProjectRepository
 from sadify_api.services.sad_preview import SadPreviewRepository
 from sadify_api.services.sad_save import SadSaveRepository
@@ -366,7 +367,7 @@ def test_all_endpoints_block_when_no_active_repo():
 
 
 def test_list_project_saves_returns_empty_for_new_project():
-    client, _drive_repo, _project_repo, _preview_repo, _save_repo = (
+    client, _drive_repo, _project_repo, _preview_repo, _save_repo, _issue_repo = (
         _client_with_history_repos()
     )
     _connect_repo(client)
@@ -390,7 +391,7 @@ def test_list_project_saves_returns_empty_for_new_project():
 
 
 def test_list_project_saves_returns_saves_in_descending_order():
-    client, drive_repo, _project_repo, preview_repo, save_repo = (
+    client, drive_repo, _project_repo, preview_repo, save_repo, _issue_repo = (
         _client_with_history_repos()
     )
     _connect_repo(client)
@@ -425,7 +426,7 @@ def test_list_project_saves_returns_saves_in_descending_order():
 
 
 def test_list_project_saves_includes_doc_url_and_change_summary():
-    client, drive_repo, _project_repo, preview_repo, save_repo = (
+    client, drive_repo, _project_repo, preview_repo, save_repo, _issue_repo = (
         _client_with_history_repos()
     )
     _connect_repo(client)
@@ -457,8 +458,65 @@ def test_list_project_saves_includes_doc_url_and_change_summary():
     assert payload["saves"][0]["source_ids"] == []
 
 
+def test_list_project_saves_marks_prepared_github_issue_sets():
+    client, drive_repo, _project_repo, preview_repo, save_repo, issue_repo = (
+        _client_with_history_repos()
+    )
+    _connect_repo(client)
+    project = client.post(
+        "/projects",
+        headers=_auth_header(),
+        json={"name": "Laundry Workflow"},
+    ).json()["project"]
+    prepared = _direct_save_for_project(
+        drive_repo,
+        preview_repo,
+        save_repo,
+        project_id=project["project_id"],
+        saved_at=datetime(2026, 5, 28, 9, 0, tzinfo=UTC),
+    )
+    unprepared = _direct_save_for_project(
+        drive_repo,
+        preview_repo,
+        save_repo,
+        project_id=project["project_id"],
+        saved_at=datetime(2026, 5, 28, 11, 0, tzinfo=UTC),
+    )
+    repo = drive_repo.get_active_repo("firebase-uid-001")
+    assert repo is not None
+    issue_repo.create_if_absent(
+        GithubIssueSet(
+            grant_id=repo.grant_id,
+            project_id=project["project_id"],
+            save_id=prepared.save_id,
+            preview_id=prepared.preview_id,
+            owner_uid="firebase-uid-001",
+            repo="octocat/laundry",
+            issues=[
+                GithubIssueDraft(
+                    marker="<!-- sadify-github-issue:PR-000001:save:0 -->",
+                    title="Implement workflow",
+                    body="Implement the saved workflow.",
+                )
+            ],
+            created_at=datetime(2026, 5, 28, 9, 5, tzinfo=UTC),
+            updated_at=datetime(2026, 5, 28, 9, 5, tzinfo=UTC),
+        )
+    )
+
+    response = client.get(
+        f"/projects/{project['project_id']}/saves",
+        headers=_auth_header(),
+    )
+
+    assert response.status_code == 200
+    saves = {save["save_id"]: save for save in response.json()["saves"]}
+    assert saves[prepared.save_id]["has_github_issue_set"] is True
+    assert saves[unprepared.save_id]["has_github_issue_set"] is False
+
+
 def test_list_project_saves_blocks_unsigned():
-    client, _drive_repo, _project_repo, _preview_repo, _save_repo = (
+    client, _drive_repo, _project_repo, _preview_repo, _save_repo, _issue_repo = (
         _client_with_history_repos()
     )
 
@@ -472,7 +530,7 @@ def test_list_project_saves_blocks_unsigned():
 
 
 def test_list_project_saves_blocks_without_active_repo():
-    client, _drive_repo, _project_repo, _preview_repo, _save_repo = (
+    client, _drive_repo, _project_repo, _preview_repo, _save_repo, _issue_repo = (
         _client_with_history_repos()
     )
 
@@ -483,7 +541,7 @@ def test_list_project_saves_blocks_without_active_repo():
 
 
 def test_list_project_saves_blocks_when_repo_disconnected():
-    client, _drive_repo, _project_repo, _preview_repo, _save_repo = (
+    client, _drive_repo, _project_repo, _preview_repo, _save_repo, _issue_repo = (
         _client_with_history_repos()
     )
     _connect_repo(client)
@@ -496,7 +554,7 @@ def test_list_project_saves_blocks_when_repo_disconnected():
 
 
 def test_list_project_saves_returns_404_for_unknown_project_id():
-    client, _drive_repo, _project_repo, _preview_repo, _save_repo = (
+    client, _drive_repo, _project_repo, _preview_repo, _save_repo, _issue_repo = (
         _client_with_history_repos()
     )
     _connect_repo(client)
@@ -511,7 +569,7 @@ def test_list_project_saves_returns_404_for_unknown_project_id():
 
 
 def test_list_project_saves_isolates_across_projects():
-    client, drive_repo, _project_repo, preview_repo, save_repo = (
+    client, drive_repo, _project_repo, preview_repo, save_repo, _issue_repo = (
         _client_with_history_repos()
     )
     _connect_repo(client)
@@ -574,6 +632,7 @@ def _client_with_history_repos():
     project_repo = ProjectRepository()
     preview_repo = SadPreviewRepository()
     save_repo = SadSaveRepository()
+    issue_repo = GithubIssueSetRepository()
     client = TestClient(
         create_app(
             token_verifier=AcceptingTokenVerifier(),
@@ -581,9 +640,10 @@ def _client_with_history_repos():
             project_repository=project_repo,
             sad_preview_repository=preview_repo,
             sad_save_repository=save_repo,
+            github_issue_set_repository=issue_repo,
         )
     )
-    return client, drive_repo, project_repo, preview_repo, save_repo
+    return client, drive_repo, project_repo, preview_repo, save_repo, issue_repo
 
 
 def _connect_repo(client: TestClient):

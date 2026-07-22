@@ -1,3 +1,6 @@
+import logging
+import os
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -33,15 +36,55 @@ from sadify_api.services.drive_repo import (
 )
 from sadify_api.services.drive_client import DriveClient
 from sadify_api.services.firestore_client import get_firestore_client
+from sadify_api.services.github_issue_sets import (
+    FirestoreGithubIssueSetRepository,
+    GithubIssueSetRepository,
+    GithubIssueSetRepositoryProtocol,
+)
 from sadify_api.services.sad_preview import SadPreviewRepository
 from sadify_api.services.sad_save import FirestoreSadSaveRepository, SadSaveRepository
 from sadify_api.services.secret_store import SecretStore
+from sadify_api.services.session_state import (
+    FirestoreSessionSnapshotRepository,
+    SessionSnapshotRepository,
+)
 from sadify_api.services.projects import FirestoreProjectRepository, ProjectRepository
+from sadify_api.services.rate_limit import (
+    RateLimitRule,
+    SlidingWindowRateLimiter,
+    rate_limit_dependency,
+)
 from sadify_api.services.wiki_state import (
     FirestoreWikiStateRepository,
     WikiStateRepository,
     get_wiki_state_repository,
 )
+
+
+def _configure_app_logging() -> None:
+    """Surface sadify_api INFO logs (e.g. gemini_token_usage) on stdout.
+
+    The API otherwise has no logging config, so the root logger's default
+    WARNING level swallows INFO. Cloud Run captures stdout, so an explicit
+    stdout handler at SADIFY_LOG_LEVEL (default INFO) makes app diagnostics
+    visible in production. Idempotent: safe across repeated create_app calls
+    in tests, and leaves propagation on so pytest caplog still works.
+    """
+    level_name = os.getenv("SADIFY_LOG_LEVEL", "INFO").upper()
+    level = getattr(logging, level_name, logging.INFO)
+    app_logger = logging.getLogger("sadify_api")
+    app_logger.setLevel(level)
+    already = any(
+        getattr(h, "_sadify_stdout", False) for h in app_logger.handlers
+    )
+    if not already:
+        import sys
+
+        handler = logging.StreamHandler(sys.stdout)
+        handler.setLevel(level)
+        handler.setFormatter(logging.Formatter("%(levelname)s %(name)s %(message)s"))
+        handler._sadify_stdout = True  # type: ignore[attr-defined]
+        app_logger.addHandler(handler)
 
 
 def create_app(
@@ -61,8 +104,11 @@ def create_app(
     secret_store: SecretStore | None = None,
     wiki_state_repository: WikiStateRepository | None = None,
     project_repository: ProjectRepository | None = None,
+    session_snapshot_repository: SessionSnapshotRepository | None = None,
+    github_issue_set_repository: GithubIssueSetRepositoryProtocol | None = None,
 ) -> FastAPI:
     config = config or load_api_config()
+    _configure_app_logging()
     firestore_client = None
     if config.persistence_mode == "firestore":
         firestore_client = get_firestore_client(config.google_cloud_project)
@@ -95,6 +141,23 @@ def create_app(
         if firestore_client is not None
         else ProjectRepository()
     )
+    session_snapshot_repository = session_snapshot_repository or (
+        FirestoreSessionSnapshotRepository(firestore_client)
+        if firestore_client is not None
+        else SessionSnapshotRepository()
+    )
+    github_issue_set_repository = github_issue_set_repository or (
+        FirestoreGithubIssueSetRepository(firestore_client)
+        if firestore_client is not None
+        else GithubIssueSetRepository()
+    )
+    model_route_limiter = SlidingWindowRateLimiter(
+        RateLimitRule(
+            max_requests=config.model_route_rate_limit,
+            window_seconds=config.model_route_rate_window_seconds,
+        )
+    )
+    model_route_rate_limit = rate_limit_dependency(model_route_limiter)
     app = FastAPI(title="SADify API", version="0.1.0")
     app.add_middleware(
         CORSMiddleware,
@@ -122,11 +185,19 @@ def create_app(
             project_repository=project_repository,
             sad_review_model=sad_review_model,
             dev_task_model=dev_task_model,
+            github_issue_set_repository=github_issue_set_repository,
+            rate_limit=model_route_rate_limit,
         )
     )
     app.include_router(create_auth_router(token_verifier))
     app.include_router(create_drafts_router(draft_repository, token_verifier))
-    app.include_router(create_analysis_router(analysis_model, analysis_repository))
+    app.include_router(
+        create_analysis_router(
+            analysis_model,
+            analysis_repository,
+            rate_limit=model_route_rate_limit,
+        )
+    )
     app.include_router(create_sources_router(source_repository))
     app.include_router(
         create_drive_router(
@@ -147,6 +218,8 @@ def create_app(
             config,
             drive_client,
             secret_store,
+            session_snapshot_repository,
+            github_issue_set_repository,
         )
     )
     app.include_router(
