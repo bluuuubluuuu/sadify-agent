@@ -1,3 +1,6 @@
+import logging
+import os
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -58,6 +61,32 @@ from sadify_api.services.wiki_state import (
 )
 
 
+def _configure_app_logging() -> None:
+    """Surface sadify_api INFO logs (e.g. gemini_token_usage) on stdout.
+
+    The API otherwise has no logging config, so the root logger's default
+    WARNING level swallows INFO. Cloud Run captures stdout, so an explicit
+    stdout handler at SADIFY_LOG_LEVEL (default INFO) makes app diagnostics
+    visible in production. Idempotent: safe across repeated create_app calls
+    in tests, and leaves propagation on so pytest caplog still works.
+    """
+    level_name = os.getenv("SADIFY_LOG_LEVEL", "INFO").upper()
+    level = getattr(logging, level_name, logging.INFO)
+    app_logger = logging.getLogger("sadify_api")
+    app_logger.setLevel(level)
+    already = any(
+        getattr(h, "_sadify_stdout", False) for h in app_logger.handlers
+    )
+    if not already:
+        import sys
+
+        handler = logging.StreamHandler(sys.stdout)
+        handler.setLevel(level)
+        handler.setFormatter(logging.Formatter("%(levelname)s %(name)s %(message)s"))
+        handler._sadify_stdout = True  # type: ignore[attr-defined]
+        app_logger.addHandler(handler)
+
+
 def create_app(
     config: ApiConfig | None = None,
     token_verifier: TokenVerifier | None = None,
@@ -79,6 +108,7 @@ def create_app(
     github_issue_set_repository: GithubIssueSetRepositoryProtocol | None = None,
 ) -> FastAPI:
     config = config or load_api_config()
+    _configure_app_logging()
     firestore_client = None
     if config.persistence_mode == "firestore":
         firestore_client = get_firestore_client(config.google_cloud_project)
